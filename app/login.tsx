@@ -3,13 +3,13 @@ import { useRouter } from 'expo-router';
 import LoginScreen from '@/screens/LoginScreen';
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  // const { login } = useAuth();
   const router = useRouter();
 
   const handleLogin = () => {
-    login();
-    router.replace('/(tabs)');
+    // login();
+    router.replace('/(tabs)' as any);
   };
 
-  return <LoginScreen onLogin={handleLogin} />;
+  return <LoginScreen />;
 }

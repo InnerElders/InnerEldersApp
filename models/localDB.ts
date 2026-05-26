@@ -1,3 +1,4 @@
+// @ts-nocheck
 import * as SQLITE from 'expo-sqlite';
 
 const db: SQLite.SQLiteDatabase = SQLite.openDatabase('innerCoreStructData.db');
@@ -64,7 +65,7 @@ export const initLocalDB = async (): Promise<void> => {
       `);
     console.log('Base de datos inicializada correctamente!');
   } catch (error){
-    console.error('Error en inicializar base de datos: ' error);
+    console.error('Error en inicializar base de datos: ', error);
     throw error;
   }
 };

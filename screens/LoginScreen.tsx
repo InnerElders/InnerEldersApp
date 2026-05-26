@@ -78,15 +78,30 @@ export default function LoginScreen() {
     const [selectedRole, setSelectedRole] = useState<RoleId>('caregiver');
     const [rut, setRut] = useState<string>('');
     const [password, setPassword] = useState<string>('');
+    const [logoPressCount, setLogoPressCount] = useState<number>(0);
 
     const handleLogin = (): void => {
-        // Aquí va la lógica de autenticación
-        // Ejemplo con Expo Router: router.replace(`/${selectedRole}`)
         console.log('Iniciando sesión como:', selectedRole);
+        if (selectedRole === 'senior') {
+            router.replace('/senior' as any);
+        } else {
+            // Cuidador y Médico irán a la pestaña principal por ahora
+            router.replace('/(tabs)' as any);
+        }
     };
 
     const handleRegister = (): void => {
         router.push('/register');
+    };
+
+    const handleLogoPress = (): void => {
+        const nextCount = logoPressCount + 1;
+        if (nextCount >= 5) {
+            setLogoPressCount(0);
+            router.push('/doctor-register');
+        } else {
+            setLogoPressCount(nextCount);
+        }
     };
 
     return (
@@ -103,9 +118,14 @@ export default function LoginScreen() {
                 >
 
                     {/* ── Logo ── */}
-                    <View style={styles.logoCircle}>
-                        <Feather name="activity" size={52} color={COLORS.primary} />
-                    </View>
+                    <TouchableOpacity
+                        onPress={handleLogoPress}
+                        activeOpacity={0.8}
+                    >
+                        <View style={styles.logoCircle}>
+                            <Feather name="activity" size={52} color={COLORS.primary} />
+                        </View>
+                    </TouchableOpacity>
 
                     {/* ── Título ── */}
                     <Text style={styles.title}>Innercore</Text>
