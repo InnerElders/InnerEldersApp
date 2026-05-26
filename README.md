@@ -17,7 +17,7 @@
    ```
 
 
-##Documentacion general
+## Documentacion general
 
 - [development build](https://docs.expo.dev/develop/development-builds/introduction/)
 - [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
@@ -40,3 +40,9 @@ Esto sirve para generar un ambiente nuevo desde cero, con la pagina por defecto 
 
 - [Expo documentation](https://docs.expo.dev/)
 - [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/)
+
+## Commando que pueden servir para el futuro:
+
+```bash
+npx expo install --pnpm <package-name>
+```
