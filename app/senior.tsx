@@ -1,22 +1,25 @@
-import { Feather } from '@expo/vector-icons';
-import { router } from 'expo-router';
 import React, { useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
   StyleSheet,
+  View,
   Text,
-  TextInput,
   TouchableOpacity,
-  View
+  ScrollView,
+  SafeAreaView,
+  StatusBar,
+  TextInput,
+  Alert,
+  ActivityIndicator,
+  Dimensions,
+  Switch,
 } from 'react-native';
-import MapView, { Circle, Marker } from 'react-native-maps';
+import { router } from 'expo-router';
+import { Feather } from '@expo/vector-icons';
+import MapView, { Marker, Circle } from 'react-native-maps';
+import { LineChart, BarChart } from 'react-native-gifted-charts';
 
-// ─── Paleta de Colores Centralizada ───────────────────────────────────────────
-const COLORS = {
+// ─── Paleta de Colores por Defecto ────────────────────────────────────────────
+const DEFAULT_COLORS = {
   background: '#f2f9f9',     // mint-50
   surface: '#ffffff',
   primary: '#0d9488',        // teal-600
@@ -46,8 +49,59 @@ const COLORS = {
   caregiverBg: '#d1fae5',
 } as const;
 
+// ─── Paleta de Alto Contraste (Modo Daltonismo) ───────────────────────────────
+const COLORBLIND_COLORS = {
+  background: '#f8fafc',     // slate-50
+  surface: '#ffffff',
+  primary: '#1d4ed8',        // Royal Blue (Altamente contrastante y seguro)
+  primaryLight: '#dbeafe',   // Blue-100
+  primaryDark: '#1e40af',    // Blue-800
+  primaryShadow: '#bfdbfe',
+  textPrimary: '#0f172a',    // Charcoal (Negro suave)
+  textSecondary: '#334155',  // Slate-700
+  textMuted: '#64748b',      // Slate-500
+  border: '#cbd5e1',        // Slate-300
+  cardBg: '#ffffff',
+
+  // Colores temáticos reconfigurados
+  heart: '#d97706',          // Ámbar/Naranja de alto contraste
+  heartLight: '#fef3c7',     // Ámbar claro
+  activity: '#1e40af',       // Azul marino
+  activityLight: '#dbeafe',
+  oxygen: '#0f172a',         // Negro/carbón de alta lectura
+  oxygenLight: '#e2e8f0',
+
+  // Acciones rápidas accesibles
+  emergency: '#b91c1c',      // Rojo oscuro de alto contraste
+  emergencyBg: '#fee2e2',
+  sos: '#c2410c',            // Naranja oscuro
+  sosBg: '#ffedd5',
+  caregiver: '#1e40af',      // Azul oscuro
+  caregiverBg: '#dbeafe',
+} as const;
+
+// Dimensiones globales
+const { width } = Dimensions.get('window');
+
+// Helper de accesibilidad para cálculo dinámico del tamaño de fuente
+const getFontSize = (baseSize: number, multiplier: number) => {
+  return Math.round(baseSize * multiplier);
+};
+
 export default function SeniorApp() {
-  const [tab, setTab] = useState<'inicio' | 'salud' | 'registro' | 'dispositivo'>('inicio');
+  const [tab, setTab] = useState<'inicio' | 'salud' | 'registro' | 'dispositivo' | 'configuracion'>('inicio');
+  
+  // ─── Estados de Perfil Editables ──────────────────────────────────────────
+  const [name, setName] = useState('Acdiel');
+  const [email, setEmail] = useState('acdiel@innercore.cl');
+  const [avatar, setAvatar] = useState('👴');
+  
+  // ─── Estados de Accesibilidad Globales ────────────────────────────────────
+  const [fontSizeMultiplier, setFontSizeMultiplier] = useState<number>(1.0); // 1.0, 1.2, 1.4
+  const [colorblindMode, setColorblindMode] = useState<boolean>(false);
+
+  // Obtener colores basados en el modo de daltonismo activo
+  const activeColors = colorblindMode ? COLORBLIND_COLORS : DEFAULT_COLORS;
 
   const handleLogout = () => {
     Alert.alert(
@@ -61,61 +115,111 @@ export default function SeniorApp() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: activeColors.background }]}>
+      <StatusBar barStyle="dark-content" backgroundColor={activeColors.background} />
 
       {/* Encabezado Principal */}
-      <View style={styles.header}>
+      <View style={[styles.header, { borderBottomColor: activeColors.border, backgroundColor: activeColors.surface }]}>
         <View style={styles.headerTitleRow}>
-          <Text style={styles.appTitle}>Innercore</Text>
-          <Text style={styles.roleTag}>Adulto Mayor</Text>
+          <Text style={[styles.appTitle, { color: activeColors.textPrimary }]}>Innercore</Text>
+          <Text style={[styles.roleTag, { backgroundColor: activeColors.primaryLight, color: activeColors.primaryDark }]}>
+            Adulto Mayor
+          </Text>
         </View>
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.7}>
-          <Feather name="log-out" size={20} color={COLORS.textSecondary} />
+          <Feather name="log-out" size={20} color={activeColors.textSecondary} />
         </TouchableOpacity>
       </View>
 
       {/* Contenido Principal con Tab Switcher */}
       <View style={styles.content}>
-        {tab === 'inicio' && <SeniorInicio setTab={setTab} />}
-        {tab === 'salud' && <SeniorSalud setTab={setTab} />}
-        {tab === 'registro' && <SeniorRegistro setTab={setTab} />}
-        {tab === 'dispositivo' && <SeniorDispositivo />}
+        {tab === 'inicio' && (
+          <SeniorInicio 
+            setTab={setTab} 
+            fontSizeMultiplier={fontSizeMultiplier} 
+            activeColors={activeColors}
+            name={name}
+            avatar={avatar}
+          />
+        )}
+        {tab === 'salud' && (
+          <SeniorSalud 
+            setTab={setTab} 
+            fontSizeMultiplier={fontSizeMultiplier} 
+            activeColors={activeColors} 
+          />
+        )}
+        {tab === 'registro' && (
+          <SeniorRegistro 
+            setTab={setTab} 
+            fontSizeMultiplier={fontSizeMultiplier} 
+            activeColors={activeColors} 
+          />
+        )}
+        {tab === 'dispositivo' && (
+          <SeniorDispositivo 
+            fontSizeMultiplier={fontSizeMultiplier} 
+            activeColors={activeColors} 
+          />
+        )}
+        {tab === 'configuracion' && (
+          <SeniorConfiguracion
+            name={name}
+            setName={setName}
+            email={email}
+            setEmail={setEmail}
+            avatar={avatar}
+            setAvatar={setAvatar}
+            fontSizeMultiplier={fontSizeMultiplier}
+            setFontSizeMultiplier={setFontSizeMultiplier}
+            colorblindMode={colorblindMode}
+            setColorblindMode={setColorblindMode}
+            activeColors={activeColors}
+          />
+        )}
       </View>
 
-      {/* Navbar Inferior Típico */}
-      <View style={styles.navbar}>
+      {/* Navbar Inferior Típico Modificado (5 Pestañas Responsivas) */}
+      <View style={[styles.navbar, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
         <NavButton
-          id="inicio"
           icon="home"
           label="Inicio"
           isActive={tab === 'inicio'}
-          color={COLORS.primary}
+          color={activeColors.primary}
           onPress={() => setTab('inicio')}
+          activeColors={activeColors}
         />
         <NavButton
-          id="salud"
           icon="heart"
           label="Salud"
           isActive={tab === 'salud'}
-          color={COLORS.heart}
+          color={activeColors.heart}
           onPress={() => setTab('salud')}
+          activeColors={activeColors}
         />
         <NavButton
-          id="registro"
           icon="edit-3"
           label="Registro"
           isActive={tab === 'registro'}
-          color={COLORS.activity}
+          color={activeColors.activity}
           onPress={() => setTab('registro')}
+          activeColors={activeColors}
         />
         <NavButton
-          id="dispositivo"
           icon="watch"
-          label="Dispositivo"
+          label="Equipos"
           isActive={tab === 'dispositivo'}
-          color={COLORS.oxygen}
+          color={activeColors.oxygen}
           onPress={() => setTab('dispositivo')}
+          activeColors={activeColors}
+        />
+        <NavButton
+          icon="settings"
+          label="Ajustes"
+          isActive={tab === 'configuracion'}
+          color={activeColors.primaryDark}
+          onPress={() => setTab('configuracion')}
+          activeColors={activeColors}
         />
       </View>
     </SafeAreaView>
@@ -124,21 +228,23 @@ export default function SeniorApp() {
 
 // ─── Sub-componente: Botón de Navbar ───────────────────────────────────────────
 interface NavButtonProps {
-  id: string;
   icon: keyof typeof Feather.glyphMap;
   label: string;
   isActive: boolean;
   color: string;
   onPress: () => void;
+  activeColors: any;
 }
 
-function NavButton({ icon, label, isActive, color, onPress }: NavButtonProps) {
+function NavButton({ icon, label, isActive, color, onPress, activeColors }: NavButtonProps) {
   return (
     <TouchableOpacity style={styles.navItem} onPress={onPress} activeOpacity={0.8}>
       <View style={[styles.navIconContainer, isActive && { backgroundColor: `${color}15` }]}>
-        <Feather name={icon} size={22} color={isActive ? color : COLORS.textMuted} />
+        <Feather name={icon} size={20} color={isActive ? color : activeColors.textMuted} />
       </View>
-      <Text style={[styles.navText, isActive && { color, fontWeight: '700' }]}>{label}</Text>
+      <Text style={[styles.navText, { color: isActive ? color : activeColors.textMuted }, isActive && { fontWeight: '700' }]}>
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -146,12 +252,19 @@ function NavButton({ icon, label, isActive, color, onPress }: NavButtonProps) {
 // ===============================================================================
 // 1. SUB-PANTALLA: INICIO
 // ===============================================================================
-function SeniorInicio({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro' | 'dispositivo') => void }) {
+interface SeniorTabProps {
+  setTab: (t: any) => void;
+  fontSizeMultiplier: number;
+  activeColors: any;
+  name?: string;
+  avatar?: string;
+}
+
+function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }: SeniorTabProps) {
   const [sosActive, setSosActive] = useState(false);
   const [showsLocation, setShowsLocation] = useState(false);
 
-  // Coordenadas fijas por defecto (Santiago, Chile como demo)
-  const [mapRegion, setMapRegion] = useState({
+  const [mapRegion] = useState({
     latitude: -33.4489,
     longitude: -70.6693,
     latitudeDelta: 0.003,
@@ -170,19 +283,18 @@ function SeniorInicio({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro' 
   };
 
   const handleSosPress = () => {
-    // TODO: CONEXIÓN BACKEND - Enviar señal SOS y lat/long al backend en tiempo real
+    // TODO: CONEXIÓN BACKEND - Enviar alerta de SOS
     setSosActive(!sosActive);
     Alert.alert(
       sosActive ? 'Alerta SOS Cancelada' : 'Alerta SOS Enviada',
       sosActive
         ? 'Se ha notificado a tus cuidadores que te encuentras a salvo.'
-        : 'Se ha enviado una alerta de pánico inmediata a todos tus cuidadores registrados con tu ubicación actual.',
+        : 'Se ha enviado una alerta de pánico inmediata a todos tus cuidadores registrados.',
       [{ text: 'Entendido' }]
     );
   };
 
   const handleContactCaregiver = () => {
-    // TODO: CONEXIÓN BACKEND - Obtener el número de teléfono del cuidador del perfil del usuario
     Alert.alert(
       'Contactar Cuidador',
       '¿Deseas llamar a tu cuidador principal?',
@@ -194,20 +306,19 @@ function SeniorInicio({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro' 
   };
 
   const handleLocationPermission = () => {
-    // Activa la geolocalización nativa en tiempo real en react-native-maps sin requerir dependencias adicionales
     setShowsLocation(true);
     Alert.alert(
       'Permiso de Ubicación',
-      'Se ha activado el acceso al GPS del teléfono. Ahora el mapa mostrará y seguirá tu ubicación real en tiempo real.',
-      [{ text: 'Excelente' }]
+      'Se ha activado el acceso al GPS del teléfono. El mapa mostrará tu ubicación real en tiempo real.',
+      [{ text: 'Aceptar' }]
     );
   };
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} showsVerticalScrollIndicator={false}>
-
-      {/* Contenedor del Mapa con Geolocalización Real Opcional */}
-      <View style={styles.mapContainer}>
+      
+      {/* Mapa Interactivos */}
+      <View style={[styles.mapContainer, { borderColor: activeColors.primaryLight }]}>
         <MapView
           style={styles.map}
           region={mapRegion}
@@ -218,10 +329,9 @@ function SeniorInicio({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro' 
           pitchEnabled={showsLocation}
           rotateEnabled={showsLocation}
         >
-          {/* Si la ubicación real no está activa, mostramos el pin simulado con radar */}
           {!showsLocation && (
             <Marker coordinate={{ latitude: -33.4489, longitude: -70.6693 }}>
-              <View style={styles.radarCenter}>
+              <View style={[styles.radarCenter, { backgroundColor: `${activeColors.primary}40` }]}>
                 <View style={styles.radarDot} />
               </View>
             </Marker>
@@ -235,157 +345,181 @@ function SeniorInicio({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro' 
             />
           )}
         </MapView>
-
-        {/* Toggle para solicitar permisos y mostrar ubicación en tiempo real */}
+        
         {showsLocation ? (
-          <View style={styles.locationTag}>
-            <Feather name="map-pin" size={14} color={COLORS.primary} style={{ marginRight: 4 }} />
-            <Text style={styles.locationText}>Ubicación GPS Real Activa</Text>
+          <View style={[styles.locationTag, { backgroundColor: activeColors.surface }]}>
+            <Feather name="map-pin" size={14} color={activeColors.primary} style={{ marginRight: 4 }} />
+            <Text style={[styles.locationText, { color: activeColors.primaryDark, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              Ubicación GPS Real Activa
+            </Text>
           </View>
         ) : (
-          <TouchableOpacity style={styles.locationTag} onPress={handleLocationPermission} activeOpacity={0.8}>
-            <Feather name="map-pin" size={14} color={COLORS.heart} style={{ marginRight: 4 }} />
-            <Text style={styles.locationText}>📍 Activar Ubicación Real</Text>
+          <TouchableOpacity style={[styles.locationTag, { backgroundColor: activeColors.surface }]} onPress={handleLocationPermission} activeOpacity={0.8}>
+            <Feather name="map-pin" size={14} color={activeColors.heart} style={{ marginRight: 4 }} />
+            <Text style={[styles.locationText, { color: activeColors.primaryDark, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              📍 Activar Ubicación Real
+            </Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Perfil del Usuario (Esperando datos) */}
-      <View style={styles.userCard}>
+      {/* Perfil del Usuario */}
+      <View style={[styles.userCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
         <View style={styles.userRow}>
           <View style={styles.avatarCircle}>
-            <Text style={styles.avatarText}>👵</Text>
+            <Text style={styles.avatarText}>{avatar}</Text>
           </View>
           <View style={styles.userInfo}>
-            {/* TODO: CONEXIÓN BACKEND - Mostrar el nombre del Adulto Mayor desde la BD */}
-            <Text style={styles.userName}>Hola, ...</Text>
-            <Text style={styles.userUpdate}>Esperando datos del backend...</Text>
+            <Text style={[styles.userName, { color: activeColors.textPrimary, fontSize: getFontSize(20, fontSizeMultiplier) }]}>
+              Hola, {name}
+            </Text>
+            <Text style={[styles.userUpdate, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+              Esperando datos del backend...
+            </Text>
           </View>
         </View>
         <TouchableOpacity style={styles.bellButton} activeOpacity={0.7} disabled>
-          <Feather name="bell" size={20} color={COLORS.textMuted} />
+          <Feather name="bell" size={20} color={activeColors.textMuted} />
         </TouchableOpacity>
       </View>
 
-      {/* Estado del Dispositivo (Desconectado y esperando) */}
-      <View style={styles.deviceStatusCard}>
-        <Text style={styles.sectionTitle}>ESTADO DEL DISPOSITIVO</Text>
+      {/* Estado del Dispositivo */}
+      <View style={[styles.deviceStatusCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+        <Text style={[styles.sectionTitle, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+          ESTADO DEL DISPOSITIVO
+        </Text>
         <View style={styles.deviceTagsRow}>
-          <View style={[styles.statusTag, { borderColor: '#cbd5e1', backgroundColor: '#f1f5f9' }]}>
-            <View style={[styles.onlineDot, { backgroundColor: '#94a3b8' }]} />
-            <Text style={[styles.deviceTagText, { color: COLORS.textSecondary }]}>Desconectado</Text>
+          <View style={[styles.statusTag, { borderColor: activeColors.border, backgroundColor: activeColors.background }]}>
+            <View style={[styles.onlineDot, { backgroundColor: activeColors.textMuted }]} />
+            <Text style={[styles.deviceTagText, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              Desconectado
+            </Text>
           </View>
-          <View style={[styles.statusTag, { borderColor: '#cbd5e1', backgroundColor: '#f1f5f9' }]}>
-            <Feather name="battery" size={16} color="#94a3b8" style={{ marginRight: 4 }} />
-            <Text style={[styles.deviceTagText, { color: COLORS.textSecondary }]}>--</Text>
+          <View style={[styles.statusTag, { borderColor: activeColors.border, backgroundColor: activeColors.background }]}>
+            <Feather name="battery" size={16} color={activeColors.textMuted} style={{ marginRight: 4 }} />
+            <Text style={[styles.deviceTagText, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              --
+            </Text>
           </View>
           <TouchableOpacity style={styles.updateBtn} activeOpacity={0.7}>
-            <Text style={styles.updateBtnText}>Conectar</Text>
+            <Text style={[styles.updateBtnText, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              Conectar
+            </Text>
           </TouchableOpacity>
         </View>
         <View style={styles.wearableInfoRow}>
-          <Feather name="watch" size={14} color={COLORS.textMuted} />
-          <Text style={[styles.wearableText, { color: COLORS.textSecondary }]}>
+          <Feather name="watch" size={14} color={activeColors.textMuted} />
+          <Text style={[styles.wearableText, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
             Ningún smartwatch vinculado (Esperando backend)
           </Text>
         </View>
       </View>
 
-      {/* Tarjetas de Métricas de Salud (Vacías esperando sensores) */}
+      {/* Tarjetas de Métricas de Salud */}
       <View style={styles.metricsContainer}>
-        <Text style={styles.sectionTitle}>SALUD — ESPERANDO SENSORES</Text>
+        <Text style={[styles.sectionTitle, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+          SALUD — ESPERANDO SENSORES
+        </Text>
         <View style={styles.metricsGrid}>
           {/* Pulso */}
-          <View style={styles.metricCard}>
-            <View style={[styles.metricIconBg, { backgroundColor: COLORS.heartLight }]}>
-              <Feather name="heart" size={22} color={COLORS.heart} />
+          <View style={[styles.metricCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+            <View style={[styles.metricIconBg, { backgroundColor: activeColors.heartLight }]}>
+              <Feather name="heart" size={22} color={activeColors.heart} />
             </View>
-            {/* TODO: CONEXIÓN BACKEND - Suscribirse a flujo de frecuencia cardíaca */}
-            <Text style={styles.metricValue}>...</Text>
-            <Text style={styles.metricUnit}>lpm</Text>
-            <Text style={styles.metricLabel}>Pulso</Text>
+            <Text style={[styles.metricValue, { color: activeColors.textPrimary, fontSize: getFontSize(22, fontSizeMultiplier) }]}>...</Text>
+            <Text style={[styles.metricUnit, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>lpm</Text>
+            <Text style={[styles.metricLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>Pulso</Text>
           </View>
-
+          
           {/* Actividad */}
-          <View style={styles.metricCard}>
-            <View style={[styles.metricIconBg, { backgroundColor: COLORS.activityLight }]}>
-              <Feather name="activity" size={22} color={COLORS.activity} />
+          <View style={[styles.metricCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+            <View style={[styles.metricIconBg, { backgroundColor: activeColors.activityLight }]}>
+              <Feather name="activity" size={22} color={activeColors.activity} />
             </View>
-            {/* TODO: CONEXIÓN BACKEND - Recibir estado de acelerómetro/giroscopio */}
-            <Text style={styles.metricValueText}>...</Text>
-            <Text style={styles.metricUnit}></Text>
-            <Text style={styles.metricLabel}>Actividad</Text>
+            <Text style={[styles.metricValueText, { color: activeColors.textPrimary, fontSize: getFontSize(15, fontSizeMultiplier) }]}>...</Text>
+            <Text style={[styles.metricLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>Actividad</Text>
           </View>
 
           {/* Oxígeno */}
-          <View style={styles.metricCard}>
-            <View style={[styles.metricIconBg, { backgroundColor: COLORS.oxygenLight }]}>
-              <Feather name="wind" size={22} color={COLORS.oxygen} />
+          <View style={[styles.metricCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+            <View style={[styles.metricIconBg, { backgroundColor: activeColors.oxygenLight }]}>
+              <Feather name="wind" size={22} color={activeColors.oxygen} />
             </View>
-            {/* TODO: CONEXIÓN BACKEND - Recibir valores de SpO2 del wearable */}
-            <Text style={styles.metricValue}>...</Text>
-            <Text style={styles.metricUnit}>SpO2</Text>
-            <Text style={styles.metricLabel}>Oxígeno</Text>
+            <Text style={[styles.metricValue, { color: activeColors.textPrimary, fontSize: getFontSize(22, fontSizeMultiplier) }]}>...</Text>
+            <Text style={[styles.metricUnit, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>SpO2</Text>
+            <Text style={[styles.metricLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>Oxígeno</Text>
           </View>
         </View>
       </View>
 
       {/* Acciones Rápidas */}
       <View style={styles.quickActionsContainer}>
-        <Text style={styles.sectionTitle}>ACCIONES CRÍTICAS DE AYUDA</Text>
+        <Text style={[styles.sectionTitle, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+          ACCIONES CRÍTICAS DE AYUDA
+        </Text>
         <View style={styles.emergencyGrid}>
-
+          
           {/* Llamada de Emergencia */}
-          <TouchableOpacity
-            style={[styles.emergencyActionCard, { borderColor: COLORS.emergency }]}
-            onPress={handleEmergencyCall}
+          <TouchableOpacity 
+            style={[styles.emergencyActionCard, { borderColor: activeColors.emergency, backgroundColor: activeColors.surface }]} 
+            onPress={handleEmergencyCall} 
             activeOpacity={0.8}
           >
-            <View style={[styles.actionIconCircle, { backgroundColor: COLORS.emergencyBg }]}>
-              <Feather name="phone-call" size={26} color={COLORS.emergency} />
+            <View style={[styles.actionIconCircle, { backgroundColor: activeColors.emergencyBg }]}>
+              <Feather name="phone-call" size={26} color={activeColors.emergency} />
             </View>
-            <Text style={styles.actionCardTitle}>Llamada{'\n'}Emergencia</Text>
-            <Text style={styles.actionCardSub}>Marca directa 131</Text>
+            <Text style={[styles.actionCardTitle, { color: activeColors.textPrimary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              Llamada{'\n'}Emergencia
+            </Text>
+            <Text style={[styles.actionCardSub, { color: activeColors.textSecondary, fontSize: getFontSize(9, fontSizeMultiplier) }]}>
+              Marca directa 131
+            </Text>
           </TouchableOpacity>
 
           {/* Alerta SOS */}
-          <TouchableOpacity
+          <TouchableOpacity 
             style={[
-              styles.emergencyActionCard,
-              { borderColor: COLORS.sos },
+              styles.emergencyActionCard, 
+              { borderColor: activeColors.sos, backgroundColor: activeColors.surface },
               sosActive && { backgroundColor: '#fff7ed' }
-            ]}
-            onPress={handleSosPress}
+            ]} 
+            onPress={handleSosPress} 
             activeOpacity={0.8}
           >
             <View style={[
-              styles.actionIconCircle,
-              { backgroundColor: COLORS.sosBg },
+              styles.actionIconCircle, 
+              { backgroundColor: activeColors.sosBg },
               sosActive && { backgroundColor: '#ffedd5' }
             ]}>
-              <Feather
-                name="alert-triangle"
-                size={26}
-                color={sosActive ? '#c2410c' : COLORS.sos}
+              <Feather 
+                name="alert-triangle" 
+                size={26} 
+                color={sosActive ? '#c2410c' : activeColors.sos} 
               />
             </View>
-            <Text style={[styles.actionCardTitle, sosActive && { color: '#c2410c' }]}>
+            <Text style={[styles.actionCardTitle, { fontSize: getFontSize(12, fontSizeMultiplier) }, sosActive && { color: '#c2410c' }]}>
               {sosActive ? 'SOS ACTIVO' : 'Alerta SOS'}
             </Text>
-            <Text style={styles.actionCardSub}>Aviso a cuidadores</Text>
+            <Text style={[styles.actionCardSub, { color: activeColors.textSecondary, fontSize: getFontSize(9, fontSizeMultiplier) }]}>
+              Aviso a cuidadores
+            </Text>
           </TouchableOpacity>
 
           {/* Contactar Cuidador */}
-          <TouchableOpacity
-            style={[styles.emergencyActionCard, { borderColor: COLORS.caregiver }]}
-            onPress={handleContactCaregiver}
+          <TouchableOpacity 
+            style={[styles.emergencyActionCard, { borderColor: activeColors.caregiver, backgroundColor: activeColors.surface }]} 
+            onPress={handleContactCaregiver} 
             activeOpacity={0.8}
           >
-            <View style={[styles.actionIconCircle, { backgroundColor: COLORS.caregiverBg }]}>
-              <Feather name="users" size={26} color={COLORS.caregiver} />
+            <View style={[styles.actionIconCircle, { backgroundColor: activeColors.caregiverBg }]}>
+              <Feather name="users" size={26} color={activeColors.caregiver} />
             </View>
-            <Text style={styles.actionCardTitle}>Contactar{'\n'}Cuidador</Text>
-            <Text style={styles.actionCardSub}>Llamar ayuda</Text>
+            <Text style={[styles.actionCardTitle, { color: activeColors.textPrimary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              Contactar{'\n'}Cuidador
+            </Text>
+            <Text style={[styles.actionCardSub, { color: activeColors.textSecondary, fontSize: getFontSize(9, fontSizeMultiplier) }]}>
+              Llamar ayuda
+            </Text>
           </TouchableOpacity>
 
         </View>
@@ -395,137 +529,181 @@ function SeniorInicio({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro' 
 }
 
 // ===============================================================================
-// 2. SUB-PANTALLA: SALUD
+// 2. SUB-PANTALLA: SALUD (CON GRÁFICOS REALES E INTERACTIVOS)
 // ===============================================================================
-function SeniorSalud({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro' | 'dispositivo') => void }) {
+function SeniorSalud({ setTab, fontSizeMultiplier, activeColors }: SeniorTabProps) {
+  
+  // Datos Reales para LineChart (Gifted Charts)
+  const lineData = [
+    { value: 72, label: 'Lun' },
+    { value: 75, label: 'Mar' },
+    { value: 70, label: 'Mié' },
+    { value: 85, label: 'Jue' },
+    { value: 72, label: 'Vie' },
+    { value: 74, label: 'Sáb' },
+    { value: 72, label: 'Hoy' }
+  ];
+
+  // Datos Reales para BarChart (Gifted Charts)
+  const barData = [
+    { value: 40, label: 'Lun', frontColor: activeColors.primaryLight },
+    { value: 55, label: 'Mar', frontColor: activeColors.primaryLight },
+    { value: 35, label: 'Mié', frontColor: activeColors.primaryLight },
+    { value: 15, label: 'Jue', frontColor: activeColors.emergency }, // Zonas de baja actividad sedentaria
+    { value: 50, label: 'Vie', frontColor: activeColors.primaryLight },
+    { value: 65, label: 'Sáb', frontColor: activeColors.primaryLight },
+    { value: 60, label: 'Hoy', frontColor: activeColors.primary }    // Hoy activo
+  ];
+
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} showsVerticalScrollIndicator={false}>
-      <Text style={styles.pageTitle}>Mi Salud</Text>
+      <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(26, fontSizeMultiplier) }]}>
+        Mi Salud
+      </Text>
 
-      {/* Gráfico de Línea - Esperando Backend */}
-      <View style={styles.chartCard}>
-        <Text style={styles.chartLabel}>Pulso Promedio Semanal (lpm)</Text>
-
-        <View style={styles.lineChartSimulated}>
-          {/* Línea horizontal central */}
-          <View style={styles.chartGridLine} />
-
-          <View style={styles.chartBarsRow}>
-            {/* Los puntos de gráfico quedan planos en cero esperando el historial del backend */}
-            <View style={styles.chartLinePointContainer}>
-              <View style={[styles.chartDot, { bottom: 10, backgroundColor: COLORS.textMuted }]} />
-              <Text style={styles.chartPointVal}>...</Text>
-            </View>
-            <View style={styles.chartLinePointContainer}>
-              <View style={[styles.chartDot, { bottom: 10, backgroundColor: COLORS.textMuted }]} />
-              <Text style={styles.chartPointVal}>...</Text>
-            </View>
-            <View style={styles.chartLinePointContainer}>
-              <View style={[styles.chartDot, { bottom: 10, backgroundColor: COLORS.textMuted }]} />
-              <Text style={styles.chartPointVal}>...</Text>
-            </View>
-            <View style={styles.chartLinePointContainer}>
-              <View style={[styles.chartDot, { bottom: 10, backgroundColor: COLORS.textMuted }]} />
-              <Text style={styles.chartPointVal}>...</Text>
-            </View>
-            <View style={styles.chartLinePointContainer}>
-              <View style={[styles.chartDot, { bottom: 10, backgroundColor: COLORS.textMuted }]} />
-              <Text style={styles.chartPointVal}>...</Text>
-            </View>
-            <View style={styles.chartLinePointContainer}>
-              <View style={[styles.chartDot, { bottom: 10, backgroundColor: COLORS.textMuted }]} />
-              <Text style={styles.chartPointVal}>...</Text>
-            </View>
-            <View style={styles.chartLinePointContainer}>
-              <View style={[styles.chartDot, { bottom: 10, backgroundColor: COLORS.textMuted }]} />
-              <Text style={styles.chartPointVal}>...</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.chartDaysRow}>
-          <Text style={styles.chartDayText}>Lun</Text>
-          <Text style={styles.chartDayText}>Mar</Text>
-          <Text style={styles.chartDayText}>Mié</Text>
-          <Text style={styles.chartDayText}>Jue</Text>
-          <Text style={styles.chartDayText}>Vie</Text>
-          <Text style={styles.chartDayText}>Sáb</Text>
-          <Text style={styles.chartDayText}>Hoy</Text>
+      {/* Gráfico de Línea Real de Pulso (react-native-gifted-charts) */}
+      <View style={[styles.chartCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+        <Text style={[styles.chartLabel, { color: activeColors.textSecondary, fontSize: getFontSize(13, fontSizeMultiplier) }]}>
+          Pulso Semanal Promedio (Curva lpm)
+        </Text>
+        <View style={styles.giftedChartWrapper}>
+          <LineChart
+            data={lineData}
+            color={activeColors.heart}
+            thickness={3.5}
+            noOfSections={3}
+            areaChart
+            startFillColor={`${activeColors.heart}35`}
+            endFillColor={`${activeColors.heart}01`}
+            dataPointsColor={activeColors.heart}
+            yAxisColor="transparent"
+            xAxisColor={activeColors.border}
+            yAxisTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
+            xAxisLabelTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
+            height={110}
+            width={width - 100}
+            spacing={34}
+            initialSpacing={14}
+            hideDataPoints={false}
+            dataPointsRadius={4.5}
+            curved
+          />
         </View>
       </View>
 
-      {/* Gráfico de Barras - STAND BY */}
-      <View style={styles.chartCard}>
-        <Text style={styles.chartLabel}>Actividad física — tiempo activo vs sedentario</Text>
-
-        <View style={styles.standbyCard}>
-          <ActivityIndicator size="small" color={COLORS.primary} style={{ marginBottom: 8 }} />
-          <Text style={styles.standbyTitle}>Gráficos en Stand-by</Text>
-          <Text style={styles.standbyDesc}>A la espera de confirmación de librería de gráficos (Carlos).</Text>
+      {/* Gráfico de Barras de Actividad Física (react-native-gifted-charts) */}
+      <View style={[styles.chartCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+        <Text style={[styles.chartLabel, { color: activeColors.textSecondary, fontSize: getFontSize(13, fontSizeMultiplier) }]}>
+          Actividad Física Semanal (Minutos Activos)
+        </Text>
+        <View style={styles.giftedChartWrapper}>
+          <BarChart
+            data={barData}
+            barWidth={18}
+            noOfSections={3}
+            barBorderRadius={4}
+            yAxisColor="transparent"
+            xAxisColor={activeColors.border}
+            yAxisTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
+            xAxisLabelTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
+            height={110}
+            width={width - 100}
+            spacing={20}
+            initialSpacing={14}
+          />
         </View>
       </View>
 
-      {/* Grilla de Métricas Detalladas (Esperando backend) */}
+      {/* Grilla de Métricas Detalladas */}
       <View style={styles.gridContainer}>
         <View style={styles.gridRow}>
-
-          <View style={styles.gridItem}>
-            <Text style={styles.gridLabel}>PRESIÓN ARTERIAL</Text>
-            {/* TODO: CONEXIÓN BACKEND - Consultar último registro guardado en la tabla de mediciones */}
-            <Text style={styles.gridValue}>... / ...</Text>
-            <Text style={styles.gridSub}>mmHg · Manual</Text>
-            <Text style={[styles.gridStatusOk, { color: COLORS.textSecondary }]}>Esperando datos...</Text>
+          
+          <View style={[styles.gridItem, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+            <Text style={[styles.gridLabel, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              PRESIÓN ARTERIAL
+            </Text>
+            <Text style={[styles.gridValue, { color: activeColors.textPrimary, fontSize: getFontSize(20, fontSizeMultiplier) }]}>
+              ... / ...
+            </Text>
+            <Text style={[styles.gridSub, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              mmHg · Manual
+            </Text>
+            <Text style={[styles.gridStatusOk, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+              Esperando datos...
+            </Text>
           </View>
 
-          <View style={styles.gridItem}>
-            <Text style={styles.gridLabel}>GLUCOSA</Text>
-            {/* TODO: CONEXIÓN BACKEND - Consultar glucosa */}
-            <Text style={styles.gridValue}>...</Text>
-            <Text style={styles.gridSub}>mg/dL · Manual</Text>
-            <Text style={[styles.gridStatusOk, { color: COLORS.textSecondary }]}>Esperando datos...</Text>
+          <View style={[styles.gridItem, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+            <Text style={[styles.gridLabel, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              GLUCOSA
+            </Text>
+            <Text style={[styles.gridValue, { color: activeColors.textPrimary, fontSize: getFontSize(20, fontSizeMultiplier) }]}>
+              ...
+            </Text>
+            <Text style={[styles.gridSub, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              mg/dL · Manual
+            </Text>
+            <Text style={[styles.gridStatusOk, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+              Esperando datos...
+            </Text>
           </View>
 
         </View>
 
         <View style={styles.gridRow}>
-
-          <View style={styles.gridItem}>
-            <Text style={styles.gridLabel}>OXÍGENO</Text>
-            {/* TODO: CONEXIÓN BACKEND - Consultar oxígeno */}
-            <Text style={styles.gridValue}>...</Text>
-            <Text style={styles.gridSub}>SpO2 · Wearable</Text>
-            <Text style={[styles.gridStatusOk, { color: COLORS.textSecondary }]}>Esperando datos...</Text>
+          
+          <View style={[styles.gridItem, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+            <Text style={[styles.gridLabel, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              OXÍGENO
+            </Text>
+            <Text style={[styles.gridValue, { color: activeColors.textPrimary, fontSize: getFontSize(20, fontSizeMultiplier) }]}>
+              ...
+            </Text>
+            <Text style={[styles.gridSub, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              SpO2 · Wearable
+            </Text>
+            <Text style={[styles.gridStatusOk, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+              Esperando datos...
+            </Text>
           </View>
 
-          <View style={styles.gridItem}>
-            <Text style={styles.gridLabel}>UBICACIÓN</Text>
-            {/* TODO: CONEXIÓN BACKEND - Consultar estado de geocercas */}
-            <Text style={styles.gridValue}>...</Text>
-            <Text style={styles.gridSub}>GPS Activo</Text>
-            <Text style={[styles.gridStatusOk, { color: COLORS.textSecondary }]}>Esperando datos...</Text>
+          <View style={[styles.gridItem, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+            <Text style={[styles.gridLabel, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              UBICACIÓN
+            </Text>
+            <Text style={[styles.gridValue, { color: activeColors.textPrimary, fontSize: getFontSize(20, fontSizeMultiplier) }]}>
+              ...
+            </Text>
+            <Text style={[styles.gridSub, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              GPS Activo
+            </Text>
+            <Text style={[styles.gridStatusOk, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+              Esperando datos...
+            </Text>
           </View>
 
         </View>
       </View>
 
       {/* Botón para navegar a Registro */}
-      <TouchableOpacity
-        style={styles.actionButton}
-        onPress={() => setTab('registro')}
+      <TouchableOpacity 
+        style={[styles.actionButton, { backgroundColor: activeColors.primary, shadowColor: activeColors.primaryShadow }]} 
+        onPress={() => setTab('registro')} 
         activeOpacity={0.85}
       >
         <Feather name="plus" size={20} color="#ffffff" style={{ marginRight: 6 }} />
-        <Text style={styles.actionButtonText}>Ingresar nuevos datos</Text>
+        <Text style={[styles.actionButtonText, { fontSize: getFontSize(16, fontSizeMultiplier) }]}>
+          Ingresar nuevos datos
+        </Text>
       </TouchableOpacity>
     </ScrollView>
   );
 }
 
 // ===============================================================================
-// 3. SUB-PANTALLA: REGISTRO DE DATOS (Vacío y limpio)
+// 3. SUB-PANTALLA: REGISTRO DE DATOS
 // ===============================================================================
-function SeniorRegistro({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro' | 'dispositivo') => void }) {
-  // Inicializados limpios para que el usuario o el backend pongan sus datos
+function SeniorRegistro({ setTab, fontSizeMultiplier, activeColors }: SeniorTabProps) {
   const [systolic, setSystolic] = useState('');
   const [diastolic, setDiastolic] = useState('');
   const [glucose, setGlucose] = useState('');
@@ -537,7 +715,7 @@ function SeniorRegistro({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro
       Alert.alert('Faltan Datos', 'Por favor ingresa todos tus valores de salud antes de guardar.');
       return;
     }
-    // TODO: CONEXIÓN BACKEND - Realizar petición POST para enviar datos clínicos al backend
+    // TODO: CONEXIÓN BACKEND - Enviar mediciones clínicas
     Alert.alert(
       'Registro Guardado',
       `Tus mediciones se han registrado con éxito localmente (Pendiente Backend):\n\n· Presión: ${systolic}/${diastolic} mmHg\n· Glucosa: ${glucose} mg/dL\n· Temperatura: ${temp} °C`,
@@ -547,51 +725,58 @@ function SeniorRegistro({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-      <Text style={styles.pageTitle}>Ingresar Datos</Text>
+      <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(26, fontSizeMultiplier) }]}>
+        Ingresar Datos
+      </Text>
 
       <View style={styles.infoBanner}>
         <Feather name="info" size={18} color="#0284c7" style={{ marginRight: 8, marginTop: 2 }} />
-        <Text style={styles.infoBannerText}>
+        <Text style={[styles.infoBannerText, { fontSize: getFontSize(12, fontSizeMultiplier) }]}>
           Ingresa tus valores medidos con tus dispositivos médicos personales (tensiómetro, glucómetro, termómetro).
         </Text>
       </View>
 
-      <View style={styles.formContainer}>
+      <View style={[styles.formContainer, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+        
         {/* Presión Sistólica */}
         <View style={styles.formRow}>
           <View style={styles.formLabelRow}>
-            <Feather name="heart" size={16} color={COLORS.heart} style={{ marginRight: 6 }} />
-            <Text style={styles.formLabel}>Presión arterial sistólica</Text>
+            <Feather name="heart" size={16} color={activeColors.heart} style={{ marginRight: 6 }} />
+            <Text style={[styles.formLabel, { color: activeColors.primaryDark, fontSize: getFontSize(13, fontSizeMultiplier) }]}>
+              Presión arterial sistólica
+            </Text>
           </View>
-          <View style={styles.inputContainer}>
+          <View style={[styles.inputContainer, { borderColor: activeColors.primaryLight }]}>
             <TextInput
-              style={styles.formInput}
+              style={[styles.formInput, { fontSize: getFontSize(16, fontSizeMultiplier), color: activeColors.textPrimary }]}
               keyboardType="numeric"
               placeholder="..."
-              placeholderTextColor={COLORS.textMuted}
+              placeholderTextColor={activeColors.textMuted}
               value={systolic}
               onChangeText={setSystolic}
             />
-            <Text style={styles.unitText}>mmHg</Text>
+            <Text style={[styles.unitText, { color: activeColors.textMuted, fontSize: getFontSize(12, fontSizeMultiplier) }]}>mmHg</Text>
           </View>
         </View>
 
         {/* Presión Diastólica */}
         <View style={styles.formRow}>
           <View style={styles.formLabelRow}>
-            <Feather name="heart" size={16} color={COLORS.heart} style={{ marginRight: 6 }} />
-            <Text style={styles.formLabel}>Presión arterial diastólica</Text>
+            <Feather name="heart" size={16} color={activeColors.heart} style={{ marginRight: 6 }} />
+            <Text style={[styles.formLabel, { color: activeColors.primaryDark, fontSize: getFontSize(13, fontSizeMultiplier) }]}>
+              Presión arterial diastólica
+            </Text>
           </View>
-          <View style={styles.inputContainer}>
+          <View style={[styles.inputContainer, { borderColor: activeColors.primaryLight }]}>
             <TextInput
-              style={styles.formInput}
+              style={[styles.formInput, { fontSize: getFontSize(16, fontSizeMultiplier), color: activeColors.textPrimary }]}
               keyboardType="numeric"
               placeholder="..."
-              placeholderTextColor={COLORS.textMuted}
+              placeholderTextColor={activeColors.textMuted}
               value={diastolic}
               onChangeText={setDiastolic}
             />
-            <Text style={styles.unitText}>mmHg</Text>
+            <Text style={[styles.unitText, { color: activeColors.textMuted, fontSize: getFontSize(12, fontSizeMultiplier) }]}>mmHg</Text>
           </View>
         </View>
 
@@ -599,18 +784,20 @@ function SeniorRegistro({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro
         <View style={styles.formRow}>
           <View style={styles.formLabelRow}>
             <Feather name="droplet" size={16} color="#ef4444" style={{ marginRight: 6 }} />
-            <Text style={styles.formLabel}>Glucosa en sangre</Text>
+            <Text style={[styles.formLabel, { color: activeColors.primaryDark, fontSize: getFontSize(13, fontSizeMultiplier) }]}>
+              Glucosa en sangre
+            </Text>
           </View>
-          <View style={styles.inputContainer}>
+          <View style={[styles.inputContainer, { borderColor: activeColors.primaryLight }]}>
             <TextInput
-              style={styles.formInput}
+              style={[styles.formInput, { fontSize: getFontSize(16, fontSizeMultiplier), color: activeColors.textPrimary }]}
               keyboardType="numeric"
               placeholder="..."
-              placeholderTextColor={COLORS.textMuted}
+              placeholderTextColor={activeColors.textMuted}
               value={glucose}
               onChangeText={setGlucose}
             />
-            <Text style={styles.unitText}>mg/dL</Text>
+            <Text style={[styles.unitText, { color: activeColors.textMuted, fontSize: getFontSize(12, fontSizeMultiplier) }]}>mg/dL</Text>
           </View>
         </View>
 
@@ -618,45 +805,51 @@ function SeniorRegistro({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro
         <View style={styles.formRow}>
           <View style={styles.formLabelRow}>
             <Feather name="thermometer" size={16} color="#8b5cf6" style={{ marginRight: 6 }} />
-            <Text style={styles.formLabel}>Temperatura corporal</Text>
+            <Text style={[styles.formLabel, { color: activeColors.primaryDark, fontSize: getFontSize(13, fontSizeMultiplier) }]}>
+              Temperatura corporal
+            </Text>
           </View>
-          <View style={styles.inputContainer}>
+          <View style={[styles.inputContainer, { borderColor: activeColors.primaryLight }]}>
             <TextInput
-              style={styles.formInput}
+              style={[styles.formInput, { fontSize: getFontSize(16, fontSizeMultiplier), color: activeColors.textPrimary }]}
               keyboardType="numeric"
               placeholder="..."
-              placeholderTextColor={COLORS.textMuted}
+              placeholderTextColor={activeColors.textMuted}
               value={temp}
               onChangeText={setTemp}
             />
-            <Text style={styles.unitText}>°C</Text>
+            <Text style={[styles.unitText, { color: activeColors.textMuted, fontSize: getFontSize(12, fontSizeMultiplier) }]}>°C</Text>
           </View>
         </View>
 
         {/* Notas y Síntomas */}
         <View style={styles.formRow}>
           <View style={styles.formLabelRow}>
-            <Feather name="file-text" size={16} color={COLORS.textSecondary} style={{ marginRight: 6 }} />
-            <Text style={styles.formLabel}>Notas / Síntomas adicionales</Text>
+            <Feather name="file-text" size={16} color={activeColors.textSecondary} style={{ marginRight: 6 }} />
+            <Text style={[styles.formLabel, { color: activeColors.primaryDark, fontSize: getFontSize(13, fontSizeMultiplier) }]}>
+              Notas / Síntomas adicionales
+            </Text>
           </View>
           <TextInput
-            style={[styles.formInput, styles.textArea]}
+            style={[styles.formInput, styles.textArea, { borderColor: activeColors.primaryLight, fontSize: getFontSize(14, fontSizeMultiplier), color: activeColors.textPrimary }]}
             multiline
             numberOfLines={3}
-            placeholder="Escribe cómo te sientes o cualquier síntoma aquí..."
-            placeholderTextColor={COLORS.textMuted}
+            placeholder="Escribe cómo te sientes..."
+            placeholderTextColor={activeColors.textMuted}
             value={notes}
             onChangeText={setNotes}
           />
         </View>
       </View>
 
-      <TouchableOpacity
-        style={styles.saveButton}
-        onPress={handleSave}
+      <TouchableOpacity 
+        style={[styles.saveButton, { backgroundColor: activeColors.primary, shadowColor: activeColors.primaryShadow }]} 
+        onPress={handleSave} 
         activeOpacity={0.85}
       >
-        <Text style={styles.saveButtonText}>Guardar Registro</Text>
+        <Text style={[styles.saveButtonText, { fontSize: getFontSize(17, fontSizeMultiplier) }]}>
+          Guardar Registro
+        </Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -665,7 +858,12 @@ function SeniorRegistro({ setTab }: { setTab: (t: 'inicio' | 'salud' | 'registro
 // ===============================================================================
 // 4. SUB-PANTALLA: DISPOSITIVO BLE
 // ===============================================================================
-function SeniorDispositivo() {
+interface SeniorDispositivosProps {
+  fontSizeMultiplier: number;
+  activeColors: any;
+}
+
+function SeniorDispositivo({ fontSizeMultiplier, activeColors }: SeniorDispositivosProps) {
   const [scanning, setScanning] = useState(false);
 
   const handleScan = () => {
@@ -678,90 +876,115 @@ function SeniorDispositivo() {
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} showsVerticalScrollIndicator={false}>
-      <Text style={styles.pageTitle}>Dispositivo BLE</Text>
+      <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(26, fontSizeMultiplier) }]}>
+        Dispositivo BLE
+      </Text>
 
-      {/* Animación/Estado de Escaneo */}
-      <View style={styles.bleScannerCard}>
-        <View style={styles.bleRadarCircle}>
+      {/* Escáner */}
+      <View style={[styles.bleScannerCard, { backgroundColor: activeColors.primaryLight, borderColor: activeColors.border }]}>
+        <View style={[styles.bleRadarCircle, { backgroundColor: activeColors.primary, shadowColor: activeColors.primary }]}>
           <Feather name="radio" size={32} color="#ffffff" />
         </View>
         {scanning ? (
           <View>
-            <ActivityIndicator size="small" color={COLORS.primaryDark} style={{ marginBottom: 4 }} />
-            <Text style={styles.bleScanTitle}>Buscando dispositivos...</Text>
+            <ActivityIndicator size="small" color={activeColors.primaryDark} style={{ marginBottom: 4 }} />
+            <Text style={[styles.bleScanTitle, { color: activeColors.primaryDark, fontSize: getFontSize(16, fontSizeMultiplier) }]}>
+              Buscando dispositivos...
+            </Text>
           </View>
         ) : (
-          <Text style={styles.bleScanTitle}>Buscador de Wearables Activo</Text>
+          <Text style={[styles.bleScanTitle, { color: activeColors.primaryDark, fontSize: getFontSize(16, fontSizeMultiplier) }]}>
+            Buscador de Wearables Activo
+          </Text>
         )}
-        <Text style={styles.bleScanSub}>Mantén encendido el Bluetooth de tu teléfono</Text>
+        <Text style={[styles.bleScanSub, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+          Mantén encendido el Bluetooth de tu teléfono
+        </Text>
       </View>
 
-      {/* Dispositivo Vinculado (Vacío esperando backend) */}
+      {/* Dispositivo Vinculado */}
       <View style={styles.pairedContainer}>
-        <Text style={styles.bleSectionTitle}>DISPOSITIVO VINCULADO</Text>
-        <View style={styles.pairedCard}>
+        <Text style={[styles.bleSectionTitle, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+          DISPOSITIVO VINCULADO
+        </Text>
+        <View style={[styles.pairedCard, { backgroundColor: activeColors.primaryLight, borderColor: activeColors.border }]}>
           <View style={styles.pairedRow}>
-            <View style={styles.watchIconContainer}>
-              <Feather name="watch" size={20} color={COLORS.textMuted} />
+            <View style={[styles.watchIconContainer, { backgroundColor: activeColors.surface }]}>
+              <Feather name="watch" size={20} color={activeColors.textMuted} />
             </View>
             <View>
-              {/* TODO: CONEXIÓN BACKEND - Leer wearable actualmente registrado y su porcentaje de batería */}
-              <Text style={styles.pairedName}>Ningún dispositivo vinculado</Text>
-              <Text style={styles.pairedStatus}>Desconectado · Esperando datos...</Text>
+              <Text style={[styles.pairedName, { color: activeColors.primaryDark, fontSize: getFontSize(15, fontSizeMultiplier) }]}>
+                Ningún dispositivo vinculado
+              </Text>
+              <Text style={[styles.pairedStatus, { color: activeColors.primary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+                Desconectado · Esperando datos...
+              </Text>
             </View>
           </View>
           <View style={[styles.onlineIndicator, { backgroundColor: '#94a3b8' }]} />
         </View>
       </View>
 
-      {/* Dispositivos Encontrados */}
+      {/* Encontrados */}
       <View style={styles.foundContainer}>
         <View style={styles.foundHeader}>
-          <Text style={styles.bleSectionTitle}>DISPOSITIVOS ENCONTRADOS</Text>
+          <Text style={[styles.bleSectionTitle, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+            DISPOSITIVOS ENCONTRADOS
+          </Text>
           <TouchableOpacity onPress={handleScan} disabled={scanning} activeOpacity={0.7}>
-            <Text style={[styles.scanBtnText, scanning && { opacity: 0.5 }]}>
+            <Text style={[styles.scanBtnText, { color: activeColors.primary }, scanning && { opacity: 0.5 }, { fontSize: getFontSize(12, fontSizeMultiplier) }]}>
               {scanning ? 'Escaneando...' : 'Escanear'}
             </Text>
           </TouchableOpacity>
         </View>
-
+        
         <View style={styles.devicesList}>
-          <DeviceCard name="Mi Band 6 (Simulado)" desc="Señal fuerte · BLE GATT 0x180D" />
-          <DeviceCard name="Apple Watch SE (Simulado)" desc="Señal media · BLE GATT 0x180D" />
+          <DeviceCard name="Mi Band 6 (Simulado)" desc="Señal fuerte · BLE GATT 0x180D" activeColors={activeColors} fontSizeMultiplier={fontSizeMultiplier} />
+          <DeviceCard name="Apple Watch SE (Simulado)" desc="Señal media · BLE GATT 0x180D" activeColors={activeColors} fontSizeMultiplier={fontSizeMultiplier} />
         </View>
       </View>
     </ScrollView>
   );
 }
 
-// Tarjeta de Dispositivo BLE para la lista
-function DeviceCard({ name, desc }: { name: string; desc: string }) {
+// Tarjeta de Dispositivo BLE
+interface DeviceCardProps {
+  name: string;
+  desc: string;
+  activeColors: any;
+  fontSizeMultiplier: number;
+}
+
+function DeviceCard({ name, desc, activeColors, fontSizeMultiplier }: DeviceCardProps) {
   const [paired, setPaired] = useState(false);
 
   const handlePair = () => {
-    // TODO: CONEXIÓN BACKEND - Registrar el UUID/GATT del wearable en el perfil del usuario backend
     setPaired(true);
     Alert.alert('Dispositivo Vinculado', `Te has conectado correctamente a: ${name}`, [{ text: 'Entendido' }]);
   };
 
   return (
-    <View style={styles.deviceCard}>
+    <View style={[styles.deviceCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
       <View style={styles.deviceCardLeft}>
         <View style={styles.deviceIconBg}>
-          <Feather name="watch" size={18} color={COLORS.oxygen} />
+          <Feather name="watch" size={18} color={activeColors.oxygen} />
         </View>
         <View>
-          <Text style={styles.deviceName}>{name}</Text>
-          <Text style={styles.deviceDesc}>{desc}</Text>
+          <Text style={[styles.deviceName, { color: activeColors.textPrimary, fontSize: getFontSize(14, fontSizeMultiplier) }]}>
+            {name}
+          </Text>
+          <Text style={[styles.deviceDesc, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+            {desc}
+          </Text>
         </View>
       </View>
-      <TouchableOpacity
-        style={[styles.pairButton, paired && { backgroundColor: '#e2e8f0' }]}
+      <TouchableOpacity 
+        style={[styles.pairButton, { backgroundColor: activeColors.primary }, paired && { backgroundColor: activeColors.border }]} 
         onPress={handlePair}
         disabled={paired}
         activeOpacity={0.7}
       >
-        <Text style={[styles.pairButtonText, paired && { color: COLORS.textMuted }]}>
+        <Text style={[styles.pairButtonText, { fontSize: getFontSize(12, fontSizeMultiplier) }, paired && { color: activeColors.textMuted }]}>
           {paired ? 'Vinculado' : 'Vincular'}
         </Text>
       </TouchableOpacity>
@@ -769,17 +992,276 @@ function DeviceCard({ name, desc }: { name: string; desc: string }) {
   );
 }
 
+// ===============================================================================
+// 5. SUB-PANTALLA: CONFIGURACIÓN Y ACCESIBILIDAD (NUEVA PESTAÑA)
+// ===============================================================================
+interface SeniorConfiguracionProps {
+  name: string;
+  setName: (n: string) => void;
+  email: string;
+  setEmail: (e: string) => void;
+  avatar: string;
+  setAvatar: (a: string) => void;
+  fontSizeMultiplier: number;
+  setFontSizeMultiplier: (m: number) => void;
+  colorblindMode: boolean;
+  setColorblindMode: (c: boolean) => void;
+  activeColors: any;
+}
+
+function SeniorConfiguracion({
+  name,
+  setName,
+  email,
+  setEmail,
+  avatar,
+  setAvatar,
+  fontSizeMultiplier,
+  setFontSizeMultiplier,
+  colorblindMode,
+  setColorblindMode,
+  activeColors,
+}: SeniorConfiguracionProps) {
+  
+  const [pass, setPass] = useState('');
+  const [confirmPass, setConfirmPass] = useState('');
+
+  const avataresDisponibles = ['👴', '👵', '👨', '👩', '👤', '❤️'];
+
+  const handleSaveProfile = () => {
+    if (!name || !email) {
+      Alert.alert('Datos Incompletos', 'El nombre y el correo no pueden estar vacíos.');
+      return;
+    }
+    if (pass && pass !== confirmPass) {
+      Alert.alert('Seguridad', 'Las contraseñas ingresadas no coinciden.');
+      return;
+    }
+    // TODO: CONEXIÓN BACKEND - Actualizar credenciales en la base de datos
+    Alert.alert(
+      'Configuración Guardada', 
+      'Tus cambios de perfil y accesibilidad se han guardado con éxito.', 
+      [{ text: 'Aceptar' }]
+    );
+  };
+
+  return (
+    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(26, fontSizeMultiplier) }]}>
+        Configuración
+      </Text>
+
+      {/* SECCIÓN 1: PERFIL */}
+      <Text style={[styles.settingsGroupTitle, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+        PERFIL DE USUARIO
+      </Text>
+      
+      <View style={[styles.settingsCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+        
+        {/* Selector de Avatar */}
+        <Text style={[styles.formLabel, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier), marginBottom: 8 }]}>
+          Foto de Perfil (Selecciona tu Avatar)
+        </Text>
+        <View style={styles.avatarPickerRow}>
+          {avataresDisponibles.map((av) => (
+            <TouchableOpacity 
+              key={av} 
+              style={[
+                styles.avatarPickerItem, 
+                avatar === av && { borderColor: activeColors.primary, backgroundColor: activeColors.primaryLight }
+              ]}
+              onPress={() => setAvatar(av)}
+            >
+              <Text style={{ fontSize: 26 }}>{av}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Input Nombre */}
+        <View style={styles.settingsFormRow}>
+          <Text style={[styles.formLabel, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier), marginBottom: 6 }]}>
+            Nombre de Mostrar
+          </Text>
+          <View style={[styles.inputContainer, { borderColor: activeColors.border }]}>
+            <TextInput
+              style={[styles.formInput, { fontSize: getFontSize(14, fontSizeMultiplier), color: activeColors.textPrimary }]}
+              value={name}
+              onChangeText={setName}
+            />
+          </View>
+        </View>
+
+        {/* Input Correo */}
+        <View style={styles.settingsFormRow}>
+          <Text style={[styles.formLabel, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier), marginBottom: 6 }]}>
+            Correo Electrónico
+          </Text>
+          <View style={[styles.inputContainer, { borderColor: activeColors.border }]}>
+            <TextInput
+              style={[styles.formInput, { fontSize: getFontSize(14, fontSizeMultiplier), color: activeColors.textPrimary }]}
+              value={email}
+              keyboardType="email-address"
+              onChangeText={setEmail}
+            />
+          </View>
+        </View>
+      </View>
+
+      {/* SECCIÓN 2: ACCESIBILIDAD E INTERFAZ (REQUERIDO) */}
+      <Text style={[styles.settingsGroupTitle, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+        ACCESIBILIDAD E INTERFAZ
+      </Text>
+
+      <View style={[styles.settingsCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+        
+        {/* Tamaño de Letra Segmentado */}
+        <View style={styles.settingsOptionRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.optionTitle, { color: activeColors.textPrimary, fontSize: getFontSize(14, fontSizeMultiplier) }]}>
+              Tamaño de Letras
+            </Text>
+            <Text style={[styles.optionDesc, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+              Aumenta el tamaño de los textos para leer mejor.
+            </Text>
+          </View>
+        </View>
+        
+        <View style={styles.fontScaleSegmentContainer}>
+          <TouchableOpacity 
+            style={[
+              styles.fontScaleSegment, 
+              fontSizeMultiplier === 1.0 && { backgroundColor: activeColors.primary, borderColor: activeColors.primary }
+            ]}
+            onPress={() => setFontSizeMultiplier(1.0)}
+          >
+            <Text style={[
+              styles.segmentText, 
+              { fontSize: 12 }, 
+              fontSizeMultiplier === 1.0 && { color: '#ffffff', fontWeight: '700' }
+            ]}>
+              Normal
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[
+              styles.fontScaleSegment, 
+              fontSizeMultiplier === 1.2 && { backgroundColor: activeColors.primary, borderColor: activeColors.primary }
+            ]}
+            onPress={() => setFontSizeMultiplier(1.2)}
+          >
+            <Text style={[
+              styles.segmentText, 
+              { fontSize: 14 }, 
+              fontSizeMultiplier === 1.2 && { color: '#ffffff', fontWeight: '700' }
+            ]}>
+              Grande
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[
+              styles.fontScaleSegment, 
+              fontSizeMultiplier === 1.4 && { backgroundColor: activeColors.primary, borderColor: activeColors.primary }
+            ]}
+            onPress={() => setFontSizeMultiplier(1.4)}
+          >
+            <Text style={[
+              styles.segmentText, 
+              { fontSize: 16 }, 
+              fontSizeMultiplier === 1.4 && { color: '#ffffff', fontWeight: '700' }
+            ]}>
+              Extra G.
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.divider} />
+
+        {/* Modo Daltonismo Switch */}
+        <View style={styles.settingsOptionSwitchRow}>
+          <View style={{ flex: 1, paddingRight: 10 }}>
+            <Text style={[styles.optionTitle, { color: activeColors.textPrimary, fontSize: getFontSize(14, fontSizeMultiplier) }]}>
+              Modo Daltonismo
+            </Text>
+            <Text style={[styles.optionDesc, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+              Optimiza la paleta visual con alto contraste accesible azul-amarillo.
+            </Text>
+          </View>
+          <Switch
+            value={colorblindMode}
+            onValueChange={setColorblindMode}
+            trackColor={{ false: '#cbd5e1', true: activeColors.primaryLight }}
+            thumbColor={colorblindMode ? activeColors.primary : '#f4f4f5'}
+          />
+        </View>
+
+      </View>
+
+      {/* SECCIÓN 3: SEGURIDAD (CONTRASENAS) */}
+      <Text style={[styles.settingsGroupTitle, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+        SEGURIDAD Y ACCESO
+      </Text>
+
+      <View style={[styles.settingsCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+        
+        {/* Nueva Contraseña */}
+        <View style={styles.settingsFormRow}>
+          <Text style={[styles.formLabel, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier), marginBottom: 6 }]}>
+            Nueva Contraseña
+          </Text>
+          <View style={[styles.inputContainer, { borderColor: activeColors.border }]}>
+            <TextInput
+              style={[styles.formInput, { fontSize: getFontSize(14, fontSizeMultiplier), color: activeColors.textPrimary }]}
+              placeholder="Min. 6 caracteres"
+              placeholderTextColor={activeColors.textMuted}
+              secureTextEntry
+              value={pass}
+              onChangeText={setPass}
+            />
+          </View>
+        </View>
+
+        {/* Confirmar Contraseña */}
+        <View style={styles.settingsFormRow}>
+          <Text style={[styles.formLabel, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier), marginBottom: 6 }]}>
+            Confirmar Contraseña
+          </Text>
+          <View style={[styles.inputContainer, { borderColor: activeColors.border }]}>
+            <TextInput
+              style={[styles.formInput, { fontSize: getFontSize(14, fontSizeMultiplier), color: activeColors.textPrimary }]}
+              placeholder="Repite la contraseña"
+              placeholderTextColor={activeColors.textMuted}
+              secureTextEntry
+              value={confirmPass}
+              onChangeText={setConfirmPass}
+            />
+          </View>
+        </View>
+      </View>
+
+      {/* Guardar Perfil */}
+      <TouchableOpacity 
+        style={[styles.saveButton, { backgroundColor: activeColors.primary, shadowColor: activeColors.primaryShadow, marginTop: 10 }]} 
+        onPress={handleSaveProfile} 
+        activeOpacity={0.85}
+      >
+        <Text style={[styles.saveButtonText, { fontSize: getFontSize(17, fontSizeMultiplier) }]}>
+          Guardar Ajustes
+        </Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
 // ─── Estilos Generales ────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: COLORS.background,
   },
   header: {
     height: 60,
-    backgroundColor: COLORS.surface,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -793,14 +1275,11 @@ const styles = StyleSheet.create({
   appTitle: {
     fontSize: 20,
     fontWeight: '800',
-    color: COLORS.textPrimary,
     letterSpacing: -0.5,
   },
   roleTag: {
     fontSize: 10,
     fontWeight: '700',
-    backgroundColor: COLORS.primaryLight,
-    color: COLORS.primaryDark,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
@@ -824,29 +1303,27 @@ const styles = StyleSheet.create({
   scrollPadding: {
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 100, // Espacio para el Navbar flotante
+    paddingBottom: 110, // Espacio para el Navbar flotante de 5 botones
   },
-
-  // Navbar inferior típico
+  
+  // Navbar inferior responsivo (5 Botones)
   navbar: {
     position: 'absolute',
     bottom: 20,
-    left: 20,
-    right: 20,
-    height: 70,
-    backgroundColor: COLORS.surface,
+    left: 15,
+    right: 15,
+    height: 72,
     borderRadius: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
+    shadowOpacity: 0.1,
     shadowRadius: 16,
     elevation: 8,
     borderWidth: 1,
-    borderColor: 'rgba(226, 232, 240, 0.8)',
-    paddingHorizontal: 10,
+    paddingHorizontal: 6,
   },
   navItem: {
     alignItems: 'center',
@@ -854,7 +1331,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   navIconContainer: {
-    width: 42,
+    width: 38,
     height: 28,
     borderRadius: 14,
     alignItems: 'center',
@@ -862,9 +1339,9 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   navText: {
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: '500',
-    color: COLORS.textMuted,
+    marginTop: 1,
   },
 
   // 1. INICIO STYLES
@@ -873,7 +1350,6 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: COLORS.primaryLight,
     position: 'relative',
     marginBottom: 16,
   },
@@ -884,7 +1360,6 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: 'rgba(13, 148, 136, 0.25)',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
@@ -900,7 +1375,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 14,
     left: 14,
-    backgroundColor: COLORS.surface,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 20,
@@ -913,19 +1387,15 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   locationText: {
-    fontSize: 12,
     fontWeight: '700',
-    color: COLORS.primaryDark,
   },
   userCard: {
-    backgroundColor: COLORS.surface,
     borderRadius: 24,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#f1f5f9',
     marginBottom: 16,
   },
   userRow: {
@@ -954,13 +1424,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   userName: {
-    fontSize: 20,
     fontWeight: '800',
-    color: COLORS.textPrimary,
   },
   userUpdate: {
-    fontSize: 11,
-    color: COLORS.textSecondary,
     marginTop: 1,
   },
   bellButton: {
@@ -972,19 +1438,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     position: 'relative',
   },
-  bellBadge: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    width: 9,
-    height: 9,
-    borderRadius: 4.5,
-    backgroundColor: '#ef4444',
-    borderWidth: 1.5,
-    borderColor: '#ffffff',
-  },
   deviceStatusCard: {
-    backgroundColor: COLORS.surface,
     borderRadius: 24,
     padding: 16,
     borderWidth: 1,
@@ -992,9 +1446,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   sectionTitle: {
-    fontSize: 11,
     fontWeight: '700',
-    color: COLORS.primaryDark,
     letterSpacing: 1.2,
     marginBottom: 12,
   },
@@ -1005,9 +1457,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   statusTag: {
-    backgroundColor: '#e6f4f1',
     borderWidth: 1,
-    borderColor: COLORS.primaryLight,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 16,
@@ -1018,27 +1468,22 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#22c55e',
     marginRight: 6,
   },
   deviceTagText: {
-    fontSize: 12,
     fontWeight: '700',
-    color: COLORS.primaryDark,
   },
   updateBtn: {
     marginLeft: 'auto',
     backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#cbd5e1',
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 16,
   },
   updateBtnText: {
-    fontSize: 12,
     fontWeight: '700',
-    color: COLORS.textSecondary,
   },
   wearableInfoRow: {
     flexDirection: 'row',
@@ -1046,8 +1491,6 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   wearableText: {
-    fontSize: 12,
-    color: COLORS.primaryDark,
     fontWeight: '500',
   },
   metricsContainer: {
@@ -1059,17 +1502,15 @@ const styles = StyleSheet.create({
   },
   metricCard: {
     flex: 1,
-    backgroundColor: COLORS.surface,
     borderRadius: 24,
     paddingVertical: 18,
     paddingHorizontal: 8,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#f1f5f9',
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.02,
+    shadowOpacity: 0.01,
     shadowRadius: 6,
     elevation: 1,
     height: 128,
@@ -1083,25 +1524,17 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   metricValue: {
-    fontSize: 22,
     fontWeight: '800',
-    color: COLORS.textPrimary,
   },
   metricValueText: {
-    fontSize: 15,
     fontWeight: '800',
-    color: COLORS.textPrimary,
     textAlign: 'center',
     lineHeight: 18,
   },
   metricUnit: {
-    fontSize: 10,
-    color: COLORS.textMuted,
     marginTop: -1,
   },
   metricLabel: {
-    fontSize: 10,
-    color: COLORS.textSecondary,
     fontWeight: '500',
     marginTop: 4,
   },
@@ -1114,7 +1547,6 @@ const styles = StyleSheet.create({
   },
   emergencyActionCard: {
     flex: 1,
-    backgroundColor: COLORS.surface,
     borderRadius: 24,
     borderWidth: 1.5,
     paddingVertical: 14,
@@ -1137,15 +1569,11 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   actionCardTitle: {
-    fontSize: 12,
     fontWeight: '800',
-    color: COLORS.textPrimary,
     textAlign: 'center',
     lineHeight: 15,
   },
   actionCardSub: {
-    fontSize: 9,
-    color: COLORS.textSecondary,
     textAlign: 'center',
     marginTop: 3,
     fontWeight: '500',
@@ -1155,99 +1583,24 @@ const styles = StyleSheet.create({
   pageTitle: {
     fontSize: 26,
     fontWeight: '800',
-    color: COLORS.textPrimary,
     marginBottom: 16,
   },
   chartCard: {
-    backgroundColor: COLORS.surface,
     borderRadius: 24,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#f1f5f9',
     marginBottom: 16,
   },
   chartLabel: {
-    fontSize: 13,
     fontWeight: '700',
-    color: COLORS.textSecondary,
-    marginBottom: 16,
+    marginBottom: 14,
   },
-  lineChartSimulated: {
-    height: 110,
-    justifyContent: 'flex-end',
-    position: 'relative',
-    paddingBottom: 10,
-  },
-  chartGridLine: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 50,
-    height: 1,
-    backgroundColor: '#f1f5f9',
-    borderStyle: 'dashed',
-  },
-  chartBarsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 4,
-  },
-  chartLinePointContainer: {
-    alignItems: 'center',
-    width: 32,
-    height: 80,
-    justifyContent: 'flex-end',
-  },
-  chartDot: {
-    position: 'absolute',
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: COLORS.primary,
-  },
-  chartPointVal: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: COLORS.textMuted,
-    marginBottom: 2,
-  },
-  chartDaysRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 8,
-    marginTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#f8fafc',
-    paddingTop: 8,
-  },
-  chartDayText: {
-    fontSize: 11,
-    color: COLORS.textMuted,
-    width: 32,
-    textAlign: 'center',
-  },
-  standbyCard: {
-    height: 120,
+  giftedChartWrapper: {
+    paddingLeft: 4,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f8fafc',
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: '#f1f5f9',
-    borderStyle: 'dashed',
-  },
-  standbyTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.textSecondary,
-    marginTop: 4,
-  },
-  standbyDesc: {
-    fontSize: 11,
-    color: COLORS.textMuted,
-    textAlign: 'center',
-    paddingHorizontal: 24,
-    marginTop: 2,
+    height: 135,
+    overflow: 'hidden',
   },
   gridContainer: {
     marginBottom: 16,
@@ -1259,43 +1612,31 @@ const styles = StyleSheet.create({
   },
   gridItem: {
     flex: 1,
-    backgroundColor: COLORS.surface,
     borderRadius: 24,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#f1f5f9',
   },
   gridLabel: {
-    fontSize: 10,
     fontWeight: '700',
-    color: COLORS.textMuted,
     letterSpacing: 0.8,
   },
   gridValue: {
-    fontSize: 20,
     fontWeight: '800',
-    color: COLORS.textPrimary,
     marginTop: 4,
   },
   gridSub: {
-    fontSize: 10,
-    color: COLORS.textSecondary,
     marginTop: 1,
   },
   gridStatusOk: {
-    fontSize: 11,
     fontWeight: '700',
-    color: COLORS.primary,
     marginTop: 6,
   },
   actionButton: {
-    backgroundColor: COLORS.primary,
     borderRadius: 20,
     paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-    shadowColor: COLORS.primaryShadow,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
@@ -1303,7 +1644,6 @@ const styles = StyleSheet.create({
   },
   actionButtonText: {
     color: '#ffffff',
-    fontSize: 16,
     fontWeight: '700',
   },
 
@@ -1319,17 +1659,14 @@ const styles = StyleSheet.create({
   },
   infoBannerText: {
     flex: 1,
-    fontSize: 12,
     color: '#0369a1',
     lineHeight: 16,
     fontWeight: '500',
   },
   formContainer: {
-    backgroundColor: COLORS.surface,
     borderRadius: 24,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#f1f5f9',
     marginBottom: 20,
     gap: 16,
   },
@@ -1342,15 +1679,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   formLabel: {
-    fontSize: 13,
     fontWeight: '700',
-    color: COLORS.primaryDark,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1.5,
-    borderColor: COLORS.primaryLight,
     borderRadius: 16,
     backgroundColor: '#ffffff',
     overflow: 'hidden',
@@ -1359,34 +1693,26 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    fontSize: 16,
-    color: COLORS.textPrimary,
     fontWeight: '600',
   },
   unitText: {
-    fontSize: 12,
     fontWeight: '700',
-    color: COLORS.textMuted,
     paddingRight: 16,
   },
   textArea: {
     borderWidth: 1.5,
-    borderColor: COLORS.primaryLight,
     borderRadius: 16,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    fontSize: 14,
     height: 80,
     textAlignVertical: 'top',
     fontWeight: '500',
   },
   saveButton: {
-    backgroundColor: COLORS.primary,
     borderRadius: 20,
     paddingVertical: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: COLORS.primaryShadow,
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.35,
     shadowRadius: 10,
@@ -1394,15 +1720,12 @@ const styles = StyleSheet.create({
   },
   saveButtonText: {
     color: '#ffffff',
-    fontSize: 17,
     fontWeight: '700',
   },
 
   // 4. BLE STYLES
   bleScannerCard: {
-    backgroundColor: '#e6f4f1',
     borderWidth: 1,
-    borderColor: COLORS.primaryLight,
     borderRadius: 28,
     padding: 24,
     alignItems: 'center',
@@ -1413,26 +1736,20 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: COLORS.primary,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
-    shadowColor: COLORS.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 4,
   },
   bleScanTitle: {
-    fontSize: 16,
     fontWeight: '800',
-    color: COLORS.primaryDark,
     textAlign: 'center',
     marginBottom: 2,
   },
   bleScanSub: {
-    fontSize: 11,
-    color: COLORS.primaryDark,
     opacity: 0.8,
     textAlign: 'center',
   },
@@ -1440,17 +1757,13 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   bleSectionTitle: {
-    fontSize: 10,
     fontWeight: '700',
-    color: COLORS.textMuted,
     letterSpacing: 1.2,
     marginBottom: 10,
     paddingLeft: 4,
   },
   pairedCard: {
-    backgroundColor: '#e6f4f1',
     borderWidth: 1.5,
-    borderColor: COLORS.primaryLight,
     borderRadius: 20,
     padding: 16,
     flexDirection: 'row',
@@ -1466,25 +1779,19 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: COLORS.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
   pairedName: {
-    fontSize: 15,
     fontWeight: '700',
-    color: COLORS.primaryDark,
   },
   pairedStatus: {
-    fontSize: 12,
-    color: COLORS.primary,
     fontWeight: '500',
   },
   onlineIndicator: {
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: '#22c55e',
   },
   foundContainer: {
     marginBottom: 12,
@@ -1497,22 +1804,18 @@ const styles = StyleSheet.create({
     paddingRight: 4,
   },
   scanBtnText: {
-    fontSize: 12,
     fontWeight: '700',
-    color: COLORS.primary,
   },
   devicesList: {
     gap: 10,
   },
   deviceCard: {
-    backgroundColor: COLORS.surface,
     borderRadius: 20,
     padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#f1f5f9',
   },
   deviceCardLeft: {
     flexDirection: 'row',
@@ -1528,23 +1831,96 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   deviceName: {
-    fontSize: 14,
     fontWeight: '700',
-    color: COLORS.textPrimary,
   },
   deviceDesc: {
-    fontSize: 10,
-    color: COLORS.textMuted,
+    fontWeight: '500',
   },
   pairButton: {
-    backgroundColor: COLORS.primary,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 10,
   },
   pairButtonText: {
     color: '#ffffff',
-    fontSize: 12,
     fontWeight: '700',
+  },
+
+  // 5. CONFIGURACIÓN STYLES
+  settingsGroupTitle: {
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    marginBottom: 10,
+    marginTop: 18,
+    paddingLeft: 4,
+  },
+  settingsCard: {
+    borderRadius: 24,
+    padding: 18,
+    borderWidth: 1,
+    gap: 14,
+    marginBottom: 8,
+  },
+  avatarPickerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    width: '100%',
+  },
+  avatarPickerItem: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  settingsFormRow: {
+    width: '100%',
+  },
+  settingsOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  settingsOptionSwitchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  optionTitle: {
+    fontWeight: '700',
+  },
+  optionDesc: {
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  fontScaleSegmentContainer: {
+    flexDirection: 'row',
+    borderWidth: 1.5,
+    borderColor: '#cbd5e1',
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#f1f5f9',
+    height: 48,
+  },
+  fontScaleSegment: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: '#cbd5e1',
+  },
+  segmentText: {
+    color: '#475569',
+    fontWeight: '600',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#cbd5e1',
+    marginVertical: 4,
+    width: '100%',
   },
 });

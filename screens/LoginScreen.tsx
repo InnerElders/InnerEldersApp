@@ -84,9 +84,10 @@ export default function LoginScreen() {
         console.log('Iniciando sesión como:', selectedRole);
         if (selectedRole === 'senior') {
             router.replace('/senior' as any);
+        } else if (selectedRole === 'caregiver') {
+            router.replace('/caregiver' as any);
         } else {
-            // Cuidador y Médico irán a la pestaña principal por ahora
-            router.replace('/(tabs)' as any);
+            router.replace('/doctor' as any);
         }
     };
 
