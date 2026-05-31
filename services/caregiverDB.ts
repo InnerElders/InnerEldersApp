@@ -4,8 +4,8 @@ import { Cuidador } from '@/models/types';
 export const caregiverController = {
   async create(cuidador: Omit<Cuidador, 'rut'> & { rut: string }): Promise<void> {
     const db = getDB();
-    await db.transactionAsync((tx: any) => {
-      tx.executeAsync(
+    await db.withTransactionAsync(async () => {
+      await db.runAsync(
         `INSERT INTO cuidador (
           rut, nombres, apellidos, email, nacimiento, residencia,
           tipo_cuidador, pacientes, psswd
@@ -38,13 +38,13 @@ export const caregiverController = {
     const values = keys.map(k => (data as any)[k]);
     const setClause = keys.map(k => `${k} = ?`).join(', ');
     values.push(rut);
-    await db.executeAsync(
+    await db.runAsync(
       `UPDATE cuidador SET ${setClause} WHERE rut = ?`, values
     );
   },
 
   async delete(rut: string): Promise<void> {
     const db = getDB();
-    await db.executeAsync('DELETE FROM cuidador WHERE rut = ?', [rut]);
+    await db.runAsync('DELETE FROM cuidador WHERE rut = ?', [rut]);
   },
 };
