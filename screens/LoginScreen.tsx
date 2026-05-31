@@ -1,6 +1,10 @@
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import React, { useState } from 'react';
+import { adultController } from '@/services/adultDB';
+import { doctorController } from '@/services/doctorDB';
+import { caregiverController } from '@/services/caregiverDB';
+
 import {
     KeyboardAvoidingView,
     Platform,
@@ -79,16 +83,30 @@ export default function LoginScreen() {
     const [rut, setRut] = useState<string>('');
     const [password, setPassword] = useState<string>('');
     const [logoPressCount, setLogoPressCount] = useState<number>(0);
+    const handleLogin = async (): Promise<void> => {
+      let user = null;
 
-    const handleLogin = (): void => {
-        console.log('Iniciando sesión como:', selectedRole);
-        if (selectedRole === 'senior') {
-            router.replace('/senior' as any);
-        } else if (selectedRole === 'caregiver') {
-            router.replace('/caregiver' as any);
-        } else {
-            router.replace('/doctor' as any);
-        }
+      if (selectedRole === 'senior') {
+        user = await adultController.getByRut(rut);
+      } else if (selectedRole === 'doctor') {
+        user = await doctorController.getByRut(rut);
+      } else {
+        user = await caregiverController.getByRut(rut);
+      }
+
+      if (!user || user.psswd !== password) {
+        alert('Credenciales incorrectas');
+        return;
+      }
+
+      console.log('Iniciando sesión como:', selectedRole);
+      if (selectedRole === 'senior') {
+          router.replace('/senior' as any);
+      } else if (selectedRole === 'caregiver') {
+          router.replace('/caregiver' as any);
+      } else {
+          router.replace('/doctor' as any);
+      }
     };
 
     const handleRegister = (): void => {
