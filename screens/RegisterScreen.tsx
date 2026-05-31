@@ -1,6 +1,10 @@
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import React, { useState } from 'react';
+import { adultController } from '@/services/adultDB';
+import { doctorController } from '@/services/doctorDB';
+import { caregiverController } from '@/services/caregiverDB';
+
 import {
     FlatList,
     KeyboardAvoidingView,
@@ -17,7 +21,7 @@ import {
 } from 'react-native';
 
 // ─── Tipos ─────────────────────────────────────────────────────────────────────
-type RegisterRole = 'caregiver' | 'senior';
+type RegisterRole = 'caregiver' | 'senior' | 'doctor';
 
 interface FormState {
     email: string;
@@ -135,11 +139,56 @@ export default function RegisterScreen() {
         return Object.keys(newErrors).length === 0;
     };
 
-    const handleRegister = (): void => {
-        if (validate()) {
-            console.log('Registrando como:', role, form);
-            // router.replace('/(tabs)');
+    const handleRegister = async (): Promise<void> => {
+      if (!validate()) return;
+
+      const fullRut = `${rut}`;
+      const fullDate = `${diaNac}/${mesNac}/${anioNac}`;
+      const regionComuna = `${region} - ${comuna}`;
+
+      try {
+        if (role === 'senior') {
+          await adultController.create({
+            rut: fullRut,
+            nombres: nombres,
+            apellidos: apellidos,
+            email: email || null,
+            nacimiento: fullDate,
+            residencia: regionComuna,
+            telefono_emergencia: parseInt(telfonoEmergencia, 10),
+            latitud_segura: latitudSegura,
+            longitud_segura: longitudSegura,
+            radio_seguro: radioSeguro,
+            psswd: password,
+          });
+        } else if (role === 'doctor') {
+          await doctorController.create({
+            rut: fullRut,
+            nombres: nombres,
+            apellidos: apellidos,
+            email: email || null,
+            nacimiento: fullDate,
+            residencia: regionComuna,
+            pacientes: '[]',
+            psswd: password,
+          });
+        } else if (role === 'caregiver') {
+          await caregiverController.create({
+            rut: fullRut,
+            nombres: nombres,
+            apellidos: apellidos,
+            email: email || null,
+            nacimiento: fullDate,
+            residencia: regionComuna,
+            //tipo_cuidador: Falta definir este campo,
+            pacientes: '[]',
+            psswd: password,
+          });
         }
+        router.replace('/(tabs)' as any);
+      } catch (err) {
+        console.error('Registration failed:', err);
+      }
     };
 
     const handleGoBack = (): void => {

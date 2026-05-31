@@ -38,7 +38,9 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "expo-sqlite",
+      "react-native-ble-plx"
     ],
     "experiments": {
       "typedRoutes": true,
