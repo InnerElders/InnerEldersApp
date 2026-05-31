@@ -14,7 +14,32 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import MapView, { Circle, Marker } from 'react-native-maps';
+let MapView: any;
+let Marker: any;
+let Circle: any;
+
+if (Platform.OS === 'web') {
+  const WebMapMock = ({ children, style }: any) => {
+    return (
+      <View style={[style, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#ecfdf5', borderWidth: 1, borderColor: '#a7f3d0', borderRadius: 12, padding: 16 }]}>
+        <Feather name="map" size={40} color="#10b981" style={{ marginBottom: 6 }} />
+        <Text style={{ color: '#047857', fontWeight: '700', fontSize: 14 }}>Mapa de Pacientes</Text>
+        <Text style={{ color: '#64748b', fontSize: 11, marginTop: 2, textAlign: 'center' }}>Simulado en versión Web · Listo para teléfonos 📱</Text>
+      </View>
+    );
+  };
+  const WebMarkerMock = ({ children }: any) => <View>{children}</View>;
+  const WebCircleMock = () => null;
+
+  MapView = WebMapMock;
+  Marker = WebMarkerMock;
+  Circle = WebCircleMock;
+} else {
+  const Maps = require('react-native-maps');
+  MapView = Maps.default;
+  Marker = Maps.Marker;
+  Circle = Maps.Circle;
+}
 import Svg, { Line, Path, Circle as SvgCircle, Text as SvgText } from 'react-native-svg';
 
 // ─── Paleta de Colores por Defecto (Tema Verde Bosque / Esmeralda) ─────────────

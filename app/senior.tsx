@@ -15,7 +15,34 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
-import MapView, { Marker, Circle } from 'react-native-maps';
+import { Platform } from 'react-native';
+
+let MapView: any;
+let Marker: any;
+let Circle: any;
+
+if (Platform.OS === 'web') {
+  const WebMapMock = ({ children, style }: any) => {
+    return (
+      <View style={[style, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#e2f0ef', borderWidth: 1, borderColor: '#99f6e4', borderRadius: 12, padding: 16 }]}>
+        <Feather name="map" size={40} color="#0d9488" style={{ marginBottom: 6 }} />
+        <Text style={{ color: '#0f766e', fontWeight: '700', fontSize: 14 }}>Mapa de Monitoreo</Text>
+        <Text style={{ color: '#64748b', fontSize: 11, marginTop: 2, textAlign: 'center' }}>Simulado en versión Web · Listo para teléfonos 📱</Text>
+      </View>
+    );
+  };
+  const WebMarkerMock = ({ children }: any) => <View>{children}</View>;
+  const WebCircleMock = () => null;
+
+  MapView = WebMapMock;
+  Marker = WebMarkerMock;
+  Circle = WebCircleMock;
+} else {
+  const Maps = require('react-native-maps');
+  MapView = Maps.default;
+  Marker = Maps.Marker;
+  Circle = Maps.Circle;
+}
 import { LineChart, BarChart } from 'react-native-gifted-charts';
 
 // ─── Paleta de Colores por Defecto ────────────────────────────────────────────
