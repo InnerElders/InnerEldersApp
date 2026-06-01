@@ -83,8 +83,6 @@ export default function LoginScreen() {
     const [rut, setRut] = useState<string>('');
     const [password, setPassword] = useState<string>('');
     const [logoPressCount, setLogoPressCount] = useState<number>(0);
-
-
     const handleLogin = async (): Promise<void> => {
       let user = null;
 
@@ -101,7 +99,14 @@ export default function LoginScreen() {
         return;
       }
 
-      router.replace('/(tabs)' as any);
+      console.log('Iniciando sesión como:', selectedRole);
+      if (selectedRole === 'senior') {
+          router.replace('/senior' as any);
+      } else if (selectedRole === 'caregiver') {
+          router.replace('/caregiver' as any);
+      } else {
+          router.replace('/doctor' as any);
+      }
     };
 
     const handleRegister = (): void => {

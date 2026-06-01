@@ -142,6 +142,12 @@ export default function RegisterScreen() {
     const handleRegister = async (): Promise<void> => {
       if (!validate()) return;
 
+      const { email, nombres, apellidos, diaNac, mesNac, anioNac, region, comuna, rut, password } = form;
+      const telefonoEmergencia = 0;
+      const latitudSegura = 0.0;
+      const longitudSegura = 0.0;
+      const radioSeguro = 0.0;
+
       const fullRut = `${rut}`;
       const fullDate = `${diaNac}/${mesNac}/${anioNac}`;
       const regionComuna = `${region} - ${comuna}`;
@@ -155,7 +161,7 @@ export default function RegisterScreen() {
             email: email || null,
             nacimiento: fullDate,
             residencia: regionComuna,
-            telefono_emergencia: parseInt(telfonoEmergencia, 10),
+            telefono_emergencia: telefonoEmergencia,
             latitud_segura: latitudSegura,
             longitud_segura: longitudSegura,
             radio_seguro: radioSeguro,
@@ -180,12 +186,19 @@ export default function RegisterScreen() {
             email: email || null,
             nacimiento: fullDate,
             residencia: regionComuna,
-            //tipo_cuidador: Falta definir este campo,
+            tipo_cuidador: 'Familiar',
             pacientes: '[]',
             psswd: password,
           });
         }
-        router.replace('/(tabs)' as any);
+        
+        if (role === 'senior') {
+          router.replace('/senior' as any);
+        } else if (role === 'caregiver') {
+          router.replace('/caregiver' as any);
+        } else {
+          router.replace('/doctor' as any);
+        }
       } catch (err) {
         console.error('Registration failed:', err);
       }

@@ -5,14 +5,14 @@ let instance: SQLite.SQLiteDatabase | null = null;
 
 export function getDB(): SQLite.SQLiteDatabase {
   if (!instance) {
-    instance = SQLite.openDatabase('innerCoreStructData.db');
+    instance = SQLite.openDatabaseSync('innerCoreStructData.db');
   }
   return instance;
 }
 
 export function resetDBInstance(): void {
   if (instance) {
-    instance.close();
+    instance.closeAsync();
     instance = null;
   }
 }
