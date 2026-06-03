@@ -1,21 +1,33 @@
-import React, { useState } from 'react';
-import {
-  StyleSheet,
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  SafeAreaView,
-  StatusBar,
-  TextInput,
-  Alert,
-  ActivityIndicator,
-  Dimensions,
-  Switch,
-} from 'react-native';
-import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
-import { Platform } from 'react-native';
+import { router } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+  useWindowDimensions,
+} from 'react-native';
+
+import { useAuth } from '@/contexts/AuthContext';
+import { sha256 } from '@/db/controllers/authController';
+import { getDB } from '@/db/dbInstance';
+import { AdultoMayor, RegistroClinico } from '@/db/types';
+import { activityService, ActivityState } from '@/services/activityService';
+import { ConnectionStatus, DeviceInfo, healthConnectService } from '@/services/healthConnectService';
+import { locationService } from '@/services/locationService';
+import { BarChart, LineChart } from 'react-native-gifted-charts';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import HistorialMedicosModal from '@/components/HistorialMedicosModal';
 
 let MapView: any;
 let Marker: any;
@@ -43,7 +55,6 @@ if (Platform.OS === 'web') {
   Marker = Maps.Marker;
   Circle = Maps.Circle;
 }
-import { LineChart, BarChart } from 'react-native-gifted-charts';
 
 // ─── Paleta de Colores por Defecto ────────────────────────────────────────────
 const DEFAULT_COLORS = {
@@ -115,17 +126,380 @@ const getFontSize = (baseSize: number, multiplier: number) => {
   return Math.round(baseSize * multiplier);
 };
 
+function getStressInfo(val: number | null | undefined) {
+  if (val === null || val === undefined) return { category: 'Sin datos', emoji: '😐', color: '#94a3b8' };
+  if (val <= 25) return { category: 'Relajado', emoji: '😊', color: '#4EECD6' };
+  if (val <= 50) return { category: 'Leve', emoji: '😐', color: '#A3E635' };
+  if (val <= 80) return { category: 'Moderado', emoji: '😟', color: '#FB923C' };
+  return { category: 'Severo', emoji: '😭', color: '#EF4444' };
+}
+
 export default function SeniorApp() {
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const isTablet = Math.min(width, height) >= 600;
   const [tab, setTab] = useState<'inicio' | 'salud' | 'registro' | 'dispositivo' | 'configuracion'>('inicio');
-  
+  const { userSession, logout: authLogout } = useAuth();
+  const rut = userSession?.rut || '12.345.678-9';
+
   // ─── Estados de Perfil Editables ──────────────────────────────────────────
-  const [name, setName] = useState('Acdiel');
+  const [name, setName] = useState(userSession?.nombres || 'Acdiel');
   const [email, setEmail] = useState('acdiel@innercore.cl');
   const [avatar, setAvatar] = useState('👴');
-  
+
+  // ─── Estados Clínicos e Historiales Dinámicos ─────────────────────────────
+  const [clinicalRecords, setClinicalRecords] = useState<RegistroClinico[]>([]);
+  const [heartRateRecords, setHeartRateRecords] = useState<number[]>([]);
+  const [glucoseHistory, setGlucoseHistory] = useState<{ value: number; label: string }[]>([]);
+  const [averageBpmHistory, setAverageBpmHistory] = useState<{ value: number; label: string }[]>([]);
+  const [averageOxygenHistory, setAverageOxygenHistory] = useState<{ value: number; label: string }[]>([]);
+  const [averageStressHistory, setAverageStressHistory] = useState<{ value: number; label: string }[]>([]);
+
+  // ─── Estados de Sensores y Ubicación ──────────────────────────────────────
+  const [safeZone, setSafeZone] = useState({ latitude: -33.4489, longitude: -70.6693, radius: 150 });
+  const [activityState, setActivityState] = useState<ActivityState>('Sedentario');
+  const [bpm, setBpm] = useState<number | null>(null);
+  const [oxygen, setOxygen] = useState<number | null>(null);
+  const [stress, setStress] = useState<number | null>(null);
+  const [latestO2, setLatestO2] = useState<number | null>(null);
+  const [latestStress, setLatestStress] = useState<number | null>(null);
+  const [bleStatus, setBleStatus] = useState<ConnectionStatus>('Desconectado');
+  const [bleDevice, setBleDevice] = useState<any>(null);
+
   // ─── Estados de Accesibilidad Globales ────────────────────────────────────
   const [fontSizeMultiplier, setFontSizeMultiplier] = useState<number>(1.0); // 1.0, 1.2, 1.4
   const [colorblindMode, setColorblindMode] = useState<boolean>(false);
+
+  // ─── Estados Persistidos del Mapa ─────────────────────────────────────────
+  const [showsLocation, setShowsLocation] = useState(false);
+  const [mapRegion, setMapRegion] = useState({
+    latitude: -33.4489,
+    longitude: -70.6693,
+    latitudeDelta: 0.003,
+    longitudeDelta: 0.003,
+  });
+
+  const handleLocationPermission = async () => {
+    const hasPermission = await locationService.requestPermissions();
+    if (hasPermission) {
+      setShowsLocation(true);
+      const loc = await locationService.getCurrentLocation();
+      if (loc) {
+        const newLat = loc.coords.latitude;
+        const newLng = loc.coords.longitude;
+        setMapRegion(prev => ({
+          ...prev,
+          latitude: newLat,
+          longitude: newLng
+        }));
+
+        // Check if safe zone is unconfigured
+        if (safeZone.latitude === 0 && safeZone.longitude === 0 && safeZone.radius === 0) {
+          const db = getDB();
+          const newRadius = 200; // 200m default
+          try {
+            await db.runAsync(
+              "UPDATE adulto_mayor SET latitud_segura = ?, longitud_segura = ?, radio_seguro = ? WHERE rut = ?",
+              [newLat, newLng, newRadius, rut]
+            );
+            setSafeZone({
+              latitude: newLat,
+              longitude: newLng,
+              radius: newRadius
+            });
+            Alert.alert(
+              'Zona Segura Auto-Configurada',
+              'Se ha configurado automáticamente una zona segura de 200 metros a tu alrededor.',
+              [{ text: 'Aceptar' }]
+            );
+          } catch (dbErr) {
+            console.error('[SeniorApp] Error auto-configuring safe zone:', dbErr);
+          }
+        } else {
+          Alert.alert(
+            'Permiso de Ubicación',
+            'Se ha activado el acceso al GPS del teléfono. El mapa mostrará tu ubicación real en tiempo real.',
+            [{ text: 'Aceptar' }]
+          );
+        }
+      }
+    } else {
+      Alert.alert(
+        'Permiso Denegado',
+        'No se pudo acceder al posicionamiento GPS. Por favor, habilítalo en los ajustes.'
+      );
+    }
+  };
+
+  // Carga inicial de datos de SQLite
+  const loadProfileAndHistory = async () => {
+    const db = getDB();
+    try {
+      // 1. Cargar datos del perfil
+      const profile = await db.getFirstAsync<AdultoMayor>(
+        "SELECT * FROM adulto_mayor WHERE rut = ?", [rut]
+      );
+      if (profile) {
+        setName(profile.nombres);
+        setEmail(profile.email || '');
+
+        let safeLat = profile.latitud_segura;
+        let safeLng = profile.longitud_segura;
+        let safeRad = profile.radio_seguro;
+
+        if (safeLat === 0 && safeLng === 0 && safeRad === 0) {
+          console.log('[SeniorApp] Safe zone not configured. Checking location permission for auto-geofencing...');
+          if (Platform.OS !== 'web') {
+            try {
+              const LocationApi = require('expo-location');
+              const { status } = await LocationApi.getForegroundPermissionsAsync();
+              if (status === 'granted') {
+                const loc = await locationService.getCurrentLocation();
+                if (loc) {
+                  safeLat = loc.coords.latitude;
+                  safeLng = loc.coords.longitude;
+                  safeRad = 200;
+
+                  await db.runAsync(
+                    "UPDATE adulto_mayor SET latitud_segura = ?, longitud_segura = ?, radio_seguro = ? WHERE rut = ?",
+                    [safeLat, safeLng, safeRad, rut]
+                  );
+                  console.log(`[SeniorApp] Auto-configured safe zone at (${safeLat}, ${safeLng}) with 200m radius.`);
+                }
+              }
+            } catch (permErr) {
+              console.error('[SeniorApp] Error reading/checking foreground permissions on startup:', permErr);
+            }
+          }
+        }
+
+        setSafeZone({
+          latitude: safeLat,
+          longitude: safeLng,
+          radius: safeRad
+        });
+
+        setMapRegion(prev => ({
+          ...prev,
+          latitude: safeLat !== 0 ? safeLat : -33.4489,
+          longitude: safeLng !== 0 ? safeLng : -70.6693
+        }));
+      }
+
+      // 2. Cargar historial clínico (últimas 7 mediciones manuales raw para el grid)
+      const clinicos = await db.getAllAsync<RegistroClinico>(
+        "SELECT * FROM registro_clinico WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 7",
+        [rut]
+      );
+      setClinicalRecords(clinicos.reverse()); // Orden cronológico (más antiguo a más nuevo)
+
+      // 3. Cargar pulso semanal promedio
+      const cardiacosAvg = await db.getAllAsync<{ day: string; avg_bpm: number }>(
+        `SELECT date(timestamp) as day, AVG(bpm) as avg_bpm
+         FROM frecuencia_cardiaca
+         WHERE adulto_rut = ? AND timestamp >= date('now', '-7 days')
+         GROUP BY day
+         ORDER BY day ASC`,
+        [rut]
+      );
+      const mappedCardiacos = cardiacosAvg.map(c => {
+        const dateObj = new Date(c.day + 'T00:00:00');
+        const dayLabels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+        const label = dayLabels[dateObj.getDay()];
+        return { value: Math.round(c.avg_bpm), label };
+      });
+      setAverageBpmHistory(mappedCardiacos);
+
+      // 4. Cargar glucosa semanal promedio
+      const glucosaAvg = await db.getAllAsync<{ day: string; avg_glucosa: number }>(
+        `SELECT date(timestamp) as day, AVG(glucosa) as avg_glucosa
+         FROM registro_clinico
+         WHERE adulto_rut = ? AND timestamp >= date('now', '-7 days')
+         GROUP BY day
+         ORDER BY day ASC`,
+        [rut]
+      );
+      const mappedGlucose = glucosaAvg.map(c => {
+        const dateObj = new Date(c.day + 'T00:00:00');
+        const dayLabels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+        const label = dayLabels[dateObj.getDay()];
+        return { value: Math.round(c.avg_glucosa), label };
+      });
+      setGlucoseHistory(mappedGlucose);
+
+      // 5. Cargar SpO2 y Estrés más recientes e historias de SQLite
+      const latestO2Record = await db.getFirstAsync<{ porcentaje: number }>(
+        "SELECT porcentaje FROM oxigeno_sangre WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 1",
+        [rut]
+      );
+      setLatestO2(latestO2Record ? latestO2Record.porcentaje : null);
+
+      const latestStressRecord = await db.getFirstAsync<{ nivel: number }>(
+        "SELECT valor AS nivel FROM estres WHERE userId = ? ORDER BY timestamp DESC LIMIT 1",
+        [rut]
+      );
+      setLatestStress(latestStressRecord ? latestStressRecord.nivel : null);
+
+      const oxigenoAvg = await db.getAllAsync<{ day: string; avg_oxygen: number }>(
+        `SELECT date(timestamp) as day, AVG(porcentaje) as avg_oxygen
+         FROM oxigeno_sangre
+         WHERE adulto_rut = ? AND timestamp >= date('now', '-7 days')
+         GROUP BY day
+         ORDER BY day ASC`,
+        [rut]
+      );
+      const mappedOxygen = oxigenoAvg.map(c => {
+        const dateObj = new Date(c.day + 'T00:00:00');
+        const dayLabels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+        const label = dayLabels[dateObj.getDay()];
+        return { value: Math.round(c.avg_oxygen), label };
+      });
+      setAverageOxygenHistory(mappedOxygen);
+
+      const estresAvg = await db.getAllAsync<{ day: string; avg_stress: number }>(
+        `SELECT date(timestamp) as day, AVG(valor) as avg_stress
+         FROM estres
+         WHERE userId = ? AND timestamp >= date('now', '-7 days')
+         GROUP BY day
+         ORDER BY day ASC`,
+        [rut]
+      );
+      const mappedStress = estresAvg.map(c => {
+        const dateObj = new Date(c.day + 'T00:00:00');
+        const dayLabels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+        const label = dayLabels[dateObj.getDay()];
+        return { value: Math.round(c.avg_stress), label };
+      });
+      setAverageStressHistory(mappedStress);
+
+    } catch (err) {
+      console.error('Error al cargar datos de SQLite en SeniorApp:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadProfileAndHistory();
+
+    // Check location permission initially to restore showsLocation and track GPS if granted
+    const checkInitialLocation = async () => {
+      if (Platform.OS === 'web') return;
+      try {
+        const LocationApi = require('expo-location');
+        const { status } = await LocationApi.getForegroundPermissionsAsync();
+        if (status === 'granted') {
+          setShowsLocation(true);
+          const loc = await locationService.getCurrentLocation();
+          if (loc) {
+            setMapRegion(prev => ({
+              ...prev,
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude
+            }));
+          }
+        }
+      } catch (err) {
+        console.error('[SeniorApp] Error checking startup location permissions:', err);
+      }
+    };
+    checkInitialLocation();
+
+    // Iniciar servicios nativos del Adulto Mayor
+    locationService.startTracking(rut);
+    activityService.startTracking(rut);
+    healthConnectService.autoReconnect(rut);
+
+    // Suscribirse a actualizaciones de sensores de forma reactiva
+    const unsubscribeActivity = activityService.addListener((state) => {
+      setActivityState(state);
+    });
+
+    const unsubscribeBpm = healthConnectService.addBpmListener((val) => {
+      setBpm(val);
+      // Al recibir un nuevo latido de Health Connect, recargar el historial de gráfico
+      if (val !== null) {
+        const db = getDB();
+        db.getAllAsync<{ bpm: number }>(
+          "SELECT bpm FROM frecuencia_cardiaca WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 7",
+          [rut]
+        ).then(res => {
+          setHeartRateRecords(res.reverse().map(c => c.bpm));
+        });
+      }
+    });
+
+    const unsubscribeOxygen = healthConnectService.addOxygenListener((val) => {
+      setOxygen(val);
+      if (val !== null) {
+        setLatestO2(val);
+        const db = getDB();
+        db.getAllAsync<{ day: string; avg_oxygen: number }>(
+          `SELECT date(timestamp) as day, AVG(porcentaje) as avg_oxygen
+           FROM oxigeno_sangre
+           WHERE adulto_rut = ? AND timestamp >= date('now', '-7 days')
+           GROUP BY day
+           ORDER BY day ASC`,
+          [rut]
+        ).then(res => {
+          const mapped = res.map(c => {
+            const dateObj = new Date(c.day + 'T00:00:00');
+            const dayLabels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+            const label = dayLabels[dateObj.getDay()];
+            return { value: Math.round(c.avg_oxygen), label };
+          });
+          setAverageOxygenHistory(mapped);
+        });
+      }
+    });
+
+    const unsubscribeStress = healthConnectService.addStressListener((val) => {
+      setStress(val);
+      if (val !== null) {
+        setLatestStress(val);
+        const db = getDB();
+        db.getAllAsync<{ day: string; avg_stress: number }>(
+          `SELECT date(timestamp) as day, AVG(valor) as avg_stress
+           FROM estres
+           WHERE userId = ? AND timestamp >= date('now', '-7 days')
+           GROUP BY day
+           ORDER BY day ASC`,
+          [rut]
+        ).then(res => {
+          const mapped = res.map(c => {
+            const dateObj = new Date(c.day + 'T00:00:00');
+            const dayLabels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+            const label = dayLabels[dateObj.getDay()];
+            return { value: Math.round(c.avg_stress), label };
+          });
+          setAverageStressHistory(mapped);
+        });
+      }
+    });
+
+    const unsubscribeBleStatus = healthConnectService.addStatusListener((status) => {
+      setBleStatus(status);
+    });
+
+    const unsubscribeBleDevice = healthConnectService.addDeviceInfoListener((info) => {
+      // Keep bleDevice as a simple mock to avoid UI crashes
+      if (info.connectedSince) {
+        setBleDevice({ name: `${info.manufacturer} ${info.model}` } as any);
+      } else {
+        setBleDevice(null);
+      }
+    });
+
+    return () => {
+      locationService.stopTracking();
+      activityService.stopTracking();
+      healthConnectService.stopSyncPolling();
+      unsubscribeActivity();
+      unsubscribeBpm();
+      unsubscribeOxygen();
+      unsubscribeStress();
+      unsubscribeBleStatus();
+      unsubscribeBleDevice();
+    };
+  }, [rut]);
 
   // Obtener colores basados en el modo de daltonismo activo
   const activeColors = colorblindMode ? COLORBLIND_COLORS : DEFAULT_COLORS;
@@ -136,7 +510,16 @@ export default function SeniorApp() {
       '¿Estás seguro de que deseas salir del perfil?',
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Salir', onPress: () => router.replace('/') },
+        {
+          text: 'Salir',
+          onPress: () => {
+            locationService.stopTracking();
+            activityService.stopTracking();
+            healthConnectService.disconnectDevice();
+            authLogout();
+            router.replace('/');
+          }
+        },
       ]
     );
   };
@@ -146,7 +529,13 @@ export default function SeniorApp() {
       <StatusBar barStyle="dark-content" backgroundColor={activeColors.background} />
 
       {/* Encabezado Principal */}
-      <View style={[styles.header, { borderBottomColor: activeColors.border, backgroundColor: activeColors.surface }]}>
+      <View style={[styles.header, { 
+        borderBottomColor: activeColors.border, 
+        backgroundColor: activeColors.surface,
+        height: undefined,
+        paddingTop: insets.top + (Platform.OS === 'android' && isTablet ? 15 : 0),
+        paddingBottom: 10
+      }]}>
         <View style={styles.headerTitleRow}>
           <Text style={[styles.appTitle, { color: activeColors.textPrimary }]}>Innercore</Text>
           <Text style={[styles.roleTag, { backgroundColor: activeColors.primaryLight, color: activeColors.primaryDark }]}>
@@ -161,36 +550,67 @@ export default function SeniorApp() {
       {/* Contenido Principal con Tab Switcher */}
       <View style={styles.content}>
         {tab === 'inicio' && (
-          <SeniorInicio 
-            setTab={setTab} 
-            fontSizeMultiplier={fontSizeMultiplier} 
+          <SeniorInicio
+            setTab={setTab}
+            fontSizeMultiplier={fontSizeMultiplier}
             activeColors={activeColors}
             name={name}
             avatar={avatar}
+            safeZone={safeZone}
+            activityState={activityState}
+            bpm={bpm}
+            oxygen={oxygen}
+            stress={stress}
+            bleStatus={bleStatus}
+            bleDevice={bleDevice}
+            clinicalRecords={clinicalRecords}
+            mapRegion={mapRegion}
+            showsLocation={showsLocation}
+            handleLocationPermission={handleLocationPermission}
           />
         )}
         {tab === 'salud' && (
-          <SeniorSalud 
-            setTab={setTab} 
-            fontSizeMultiplier={fontSizeMultiplier} 
-            activeColors={activeColors} 
+          <SeniorSalud
+            setTab={setTab}
+            fontSizeMultiplier={fontSizeMultiplier}
+            activeColors={activeColors}
+            clinicalRecords={clinicalRecords}
+            heartRateRecords={heartRateRecords}
+            averageBpmHistory={averageBpmHistory}
+            averageOxygenHistory={averageOxygenHistory}
+            averageStressHistory={averageStressHistory}
+            latestO2={latestO2}
+            latestStress={latestStress}
           />
         )}
         {tab === 'registro' && (
-          <SeniorRegistro 
-            setTab={setTab} 
-            fontSizeMultiplier={fontSizeMultiplier} 
-            activeColors={activeColors} 
+          <SeniorRegistro
+            setTab={setTab}
+            fontSizeMultiplier={fontSizeMultiplier}
+            activeColors={activeColors}
+            rut={rut}
+            refreshClinicalData={loadProfileAndHistory}
+            bpm={bpm}
+            oxygen={oxygen}
+            stress={stress}
+            activityState={activityState}
+            avatar={avatar}
           />
         )}
         {tab === 'dispositivo' && (
-          <SeniorDispositivo 
-            fontSizeMultiplier={fontSizeMultiplier} 
-            activeColors={activeColors} 
+          <SeniorDispositivo
+            fontSizeMultiplier={fontSizeMultiplier}
+            activeColors={activeColors}
+            rut={rut}
+            bleStatus={bleStatus}
+            bleDevice={bleDevice}
+            bpm={bpm}
+            oxygen={oxygen}
           />
         )}
         {tab === 'configuracion' && (
           <SeniorConfiguracion
+            rut={rut}
             name={name}
             setName={setName}
             email={email}
@@ -202,12 +622,20 @@ export default function SeniorApp() {
             colorblindMode={colorblindMode}
             setColorblindMode={setColorblindMode}
             activeColors={activeColors}
+            onProfileUpdated={loadProfileAndHistory}
           />
         )}
       </View>
 
       {/* Navbar Inferior Típico Modificado (5 Pestañas Responsivas) */}
-      <View style={[styles.navbar, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+      <View style={[
+        styles.navbar,
+        {
+          backgroundColor: activeColors.surface,
+          borderColor: activeColors.border,
+          bottom: insets.bottom > 0 ? insets.bottom + 6 : 20
+        }
+      ]}>
         <NavButton
           icon="home"
           label="Inicio"
@@ -280,23 +708,59 @@ function NavButton({ icon, label, isActive, color, onPress, activeColors }: NavB
 // 1. SUB-PANTALLA: INICIO
 // ===============================================================================
 interface SeniorTabProps {
-  setTab: (t: any) => void;
+  setTab?: (t: any) => void;
   fontSizeMultiplier: number;
   activeColors: any;
   name?: string;
   avatar?: string;
+  safeZone?: { latitude: number; longitude: number; radius: number };
+  activityState?: ActivityState;
+  bpm?: number | null;
+  oxygen?: number | null;
+  stress?: number | null;
+  bleStatus?: ConnectionStatus;
+  bleDevice?: any;
+  clinicalRecords?: RegistroClinico[];
+  heartRateRecords?: number[];
+  mapRegion?: any;
+  showsLocation?: boolean;
+  handleLocationPermission?: () => Promise<void>;
+  averageBpmHistory?: any[];
 }
 
-function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }: SeniorTabProps) {
-  const [sosActive, setSosActive] = useState(false);
-  const [showsLocation, setShowsLocation] = useState(false);
+function SeniorInicio({
+  setTab,
+  fontSizeMultiplier,
+  activeColors,
+  name,
+  avatar,
+  safeZone,
+  activityState,
+  bpm,
+  oxygen,
+  stress,
+  bleStatus,
+  bleDevice,
+  clinicalRecords,
+  mapRegion: propMapRegion,
+  showsLocation: propShowsLocation,
+  handleLocationPermission: propHandleLocationPermission
+}: SeniorTabProps) {
+  const insets = useSafeAreaInsets();
+  const latestClinico = clinicalRecords && clinicalRecords.length > 0
+    ? clinicalRecords[clinicalRecords.length - 1]
+    : null;
 
-  const [mapRegion] = useState({
-    latitude: -33.4489,
-    longitude: -70.6693,
+  const [sosActive, setSosActive] = useState(false);
+
+  const mapRegion = propMapRegion || {
+    latitude: safeZone?.latitude || -33.4489,
+    longitude: safeZone?.longitude || -70.6693,
     latitudeDelta: 0.003,
     longitudeDelta: 0.003,
-  });
+  };
+  const showsLocation = propShowsLocation || false;
+  const handleLocationPermission = propHandleLocationPermission || (async () => { });
 
   const handleEmergencyCall = () => {
     Alert.alert(
@@ -310,7 +774,6 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
   };
 
   const handleSosPress = () => {
-    // TODO: CONEXIÓN BACKEND - Enviar alerta de SOS
     setSosActive(!sosActive);
     Alert.alert(
       sosActive ? 'Alerta SOS Cancelada' : 'Alerta SOS Enviada',
@@ -332,18 +795,17 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
     );
   };
 
-  const handleLocationPermission = () => {
-    setShowsLocation(true);
-    Alert.alert(
-      'Permiso de Ubicación',
-      'Se ha activado el acceso al GPS del teléfono. El mapa mostrará tu ubicación real en tiempo real.',
-      [{ text: 'Aceptar' }]
-    );
+  const handleDeviceAction = () => {
+    if (bleStatus === 'Conectado') {
+      healthConnectService.disconnectDevice();
+    } else {
+      if (setTab) setTab('dispositivo'); // Redirigir a pestaña de vinculación
+    }
   };
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} showsVerticalScrollIndicator={false}>
-      
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollPadding, { paddingBottom: 110 + insets.bottom }]} showsVerticalScrollIndicator={false}>
+
       {/* Mapa Interactivos */}
       <View style={[styles.mapContainer, { borderColor: activeColors.primaryLight }]}>
         <MapView
@@ -356,23 +818,30 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
           pitchEnabled={showsLocation}
           rotateEnabled={showsLocation}
         >
-          {!showsLocation && (
-            <Marker coordinate={{ latitude: -33.4489, longitude: -70.6693 }}>
-              <View style={[styles.radarCenter, { backgroundColor: `${activeColors.primary}40` }]}>
-                <View style={styles.radarDot} />
+          {safeZone && safeZone.latitude !== 0 && safeZone.longitude !== 0 && safeZone.radius !== 0 && (
+            <Marker coordinate={{ latitude: safeZone.latitude, longitude: safeZone.longitude }} title="Mi Zona Segura">
+              <View style={[styles.radarCenter, { backgroundColor: `${activeColors.primary}40`, borderColor: activeColors.primary }]}>
+                <View style={[styles.radarDot, { backgroundColor: activeColors.primary }]} />
               </View>
             </Marker>
           )}
-          {!showsLocation && (
+          {safeZone && safeZone.latitude !== 0 && safeZone.longitude !== 0 && safeZone.radius !== 0 && (
             <Circle
-              center={{ latitude: -33.4489, longitude: -70.6693 }}
-              radius={80}
-              strokeColor="rgba(13, 148, 136, 0.3)"
-              fillColor="rgba(13, 148, 136, 0.1)"
+              center={{ latitude: safeZone.latitude, longitude: safeZone.longitude }}
+              radius={safeZone.radius}
+              strokeColor={`${activeColors.primary}80`}
+              fillColor={`${activeColors.primary}15`}
             />
           )}
         </MapView>
-        
+        {safeZone && safeZone.latitude === 0 && safeZone.longitude === 0 && safeZone.radius === 0 && (
+          <View style={{ position: 'absolute', bottom: 12, alignSelf: 'center', backgroundColor: 'rgba(255,255,255,0.9)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: activeColors.border }}>
+            <Text style={{ color: activeColors.textSecondary, fontSize: 11, textAlign: 'center', fontWeight: 'bold' }}>
+              Zona segura no configurada
+            </Text>
+          </View>
+        )}
+
         {showsLocation ? (
           <View style={[styles.locationTag, { backgroundColor: activeColors.surface }]}>
             <Feather name="map-pin" size={14} color={activeColors.primary} style={{ marginRight: 4 }} />
@@ -401,7 +870,7 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
               Hola, {name}
             </Text>
             <Text style={[styles.userUpdate, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
-              Esperando datos del backend...
+              Perfil conectado · Dispositivo activo
             </Text>
           </View>
         </View>
@@ -416,28 +885,64 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
           ESTADO DEL DISPOSITIVO
         </Text>
         <View style={styles.deviceTagsRow}>
-          <View style={[styles.statusTag, { borderColor: activeColors.border, backgroundColor: activeColors.background }]}>
-            <View style={[styles.onlineDot, { backgroundColor: activeColors.textMuted }]} />
-            <Text style={[styles.deviceTagText, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
-              Desconectado
+          <View style={[
+            styles.statusTag,
+            { borderColor: activeColors.border },
+            bleStatus === 'Conectado' && { backgroundColor: activeColors.primaryLight },
+            bleStatus === 'Conectando' && { backgroundColor: '#f59e0b' },
+            bleStatus === 'Desconectado' && { backgroundColor: activeColors.background }
+          ]}>
+            <View style={[
+              styles.onlineDot,
+              bleStatus === 'Conectado' && { backgroundColor: activeColors.primary },
+              bleStatus === 'Conectando' && { backgroundColor: '#f59e0b' },
+              bleStatus === 'Desconectado' && { backgroundColor: activeColors.textMuted }
+            ]} />
+            <Text style={[
+              styles.deviceTagText,
+              { fontSize: getFontSize(12, fontSizeMultiplier) },
+              bleStatus === 'Conectado' && { color: activeColors.primaryDark, fontWeight: '700' },
+              bleStatus === 'Conectando' && { color: activeColors.oxygen, fontWeight: '700' },
+              bleStatus === 'Desconectado' && { color: activeColors.textSecondary }
+            ]}>
+              {bleStatus === 'Conectado' ? (bpm !== null || healthConnectService.getIsSimulated() ? 'Conectado' : 'Conectado - esperando datos') : bleStatus}
             </Text>
           </View>
-          <View style={[styles.statusTag, { borderColor: activeColors.border, backgroundColor: activeColors.background }]}>
-            <Feather name="battery" size={16} color={activeColors.textMuted} style={{ marginRight: 4 }} />
-            <Text style={[styles.deviceTagText, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
-              --
-            </Text>
-          </View>
-          <TouchableOpacity style={styles.updateBtn} activeOpacity={0.7}>
-            <Text style={[styles.updateBtnText, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
-              Conectar
-            </Text>
-          </TouchableOpacity>
+          {bleStatus === 'Conectado' ? (
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: activeColors.primaryLight,
+              paddingHorizontal: 12,
+              paddingVertical: 7,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: activeColors.primary,
+              marginLeft: 'auto'
+            }}>
+              <Feather name="check" size={14} color={activeColors.primaryDark} style={{ marginRight: 4 }} />
+              <Text style={{ color: activeColors.primaryDark, fontSize: getFontSize(12, fontSizeMultiplier), fontWeight: '700' }}>
+                Permisos Activos
+              </Text>
+            </View>
+          ) : (
+            <TouchableOpacity style={styles.updateBtn} onPress={handleDeviceAction} activeOpacity={0.7}>
+              <Text style={[styles.updateBtnText, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+                Vincular
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
         <View style={styles.wearableInfoRow}>
-          <Feather name="watch" size={14} color={activeColors.textMuted} />
-          <Text style={[styles.wearableText, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
-            Ningún smartwatch vinculado (Esperando backend)
+          <Feather name="watch" size={14} color={bleStatus === 'Conectado' ? activeColors.primary : activeColors.textMuted} />
+          <Text style={[
+            styles.wearableText,
+            { fontSize: getFontSize(12, fontSizeMultiplier) },
+            bleStatus === 'Conectado' ? { color: activeColors.textPrimary, fontWeight: '600' } : { color: activeColors.textSecondary }
+          ]}>
+            {bleStatus === 'Conectado'
+              ? (bleDevice?.name || 'Xiaomi Redmi Watch 5 Active')
+              : 'Ningún smartwatch vinculado'}
           </Text>
         </View>
       </View>
@@ -445,7 +950,7 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
       {/* Tarjetas de Métricas de Salud */}
       <View style={styles.metricsContainer}>
         <Text style={[styles.sectionTitle, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
-          SALUD — ESPERANDO SENSORES
+          SALUD — SENSORES EN TIEMPO REAL
         </Text>
         <View style={styles.metricsGrid}>
           {/* Pulso */}
@@ -453,18 +958,26 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
             <View style={[styles.metricIconBg, { backgroundColor: activeColors.heartLight }]}>
               <Feather name="heart" size={22} color={activeColors.heart} />
             </View>
-            <Text style={[styles.metricValue, { color: activeColors.textPrimary, fontSize: getFontSize(22, fontSizeMultiplier) }]}>...</Text>
+            <Text style={[styles.metricValue, { color: activeColors.textPrimary, fontSize: getFontSize(22, fontSizeMultiplier) }]}>
+              {bpm !== null ? bpm : '--'}
+            </Text>
             <Text style={[styles.metricUnit, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>lpm</Text>
-            <Text style={[styles.metricLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>Pulso</Text>
+            <Text style={[styles.metricLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              {bpm !== null ? (healthConnectService.getIsSimulated() ? 'Pulso (Simulado)' : 'Pulso (Real)') : 'Sin Conexión'}
+            </Text>
           </View>
-          
+
           {/* Actividad */}
           <View style={[styles.metricCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
             <View style={[styles.metricIconBg, { backgroundColor: activeColors.activityLight }]}>
               <Feather name="activity" size={22} color={activeColors.activity} />
             </View>
-            <Text style={[styles.metricValueText, { color: activeColors.textPrimary, fontSize: getFontSize(15, fontSizeMultiplier) }]}>...</Text>
-            <Text style={[styles.metricLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>Actividad</Text>
+            <Text style={[styles.metricValueText, { color: activeColors.textPrimary, fontSize: getFontSize(14, fontSizeMultiplier), fontWeight: '700', textAlign: 'center', marginTop: 4 }]}>
+              {activityState}
+            </Text>
+            <Text style={[styles.metricLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier), marginTop: 4 }]}>
+              Actividad
+            </Text>
           </View>
 
           {/* Oxígeno */}
@@ -472,10 +985,35 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
             <View style={[styles.metricIconBg, { backgroundColor: activeColors.oxygenLight }]}>
               <Feather name="wind" size={22} color={activeColors.oxygen} />
             </View>
-            <Text style={[styles.metricValue, { color: activeColors.textPrimary, fontSize: getFontSize(22, fontSizeMultiplier) }]}>...</Text>
+            <Text style={[styles.metricValue, { color: activeColors.textPrimary, fontSize: getFontSize(22, fontSizeMultiplier) }]}>
+              {oxygen !== null ? `${oxygen}%` : '--'}
+            </Text>
             <Text style={[styles.metricUnit, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>SpO2</Text>
-            <Text style={[styles.metricLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>Oxígeno</Text>
+            <Text style={[styles.metricLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              {oxygen !== null ? (healthConnectService.getIsSimulated() ? 'Oxígeno (Simulado)' : 'Oxígeno (Real)') : 'Oxígeno'}
+            </Text>
           </View>
+
+          {/* Estrés */}
+          {(() => {
+            const stressInfo = getStressInfo(stress);
+            return (
+              <View style={[styles.metricCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+                <View style={[styles.metricIconBg, { backgroundColor: stressInfo.color + '20' }]}>
+                  <Text style={{ fontSize: 20 }}>{stressInfo.emoji}</Text>
+                </View>
+                <Text style={[styles.metricValue, { color: activeColors.textPrimary, fontSize: getFontSize(22, fontSizeMultiplier) }]}>
+                  {stress !== null ? `${stress}%` : '--'}
+                </Text>
+                <Text style={[styles.metricUnit, { color: stressInfo.color, fontSize: getFontSize(10, fontSizeMultiplier), fontWeight: '700' }]}>
+                  {stressInfo.category}
+                </Text>
+                <Text style={[styles.metricLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+                  {stress !== null ? (healthConnectService.getIsSimulated() ? 'Estrés (Simulado)' : 'Estrés (Real)') : 'Estrés'}
+                </Text>
+              </View>
+            );
+          })()}
         </View>
       </View>
 
@@ -485,11 +1023,11 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
           ACCIONES CRÍTICAS DE AYUDA
         </Text>
         <View style={styles.emergencyGrid}>
-          
+
           {/* Llamada de Emergencia */}
-          <TouchableOpacity 
-            style={[styles.emergencyActionCard, { borderColor: activeColors.emergency, backgroundColor: activeColors.surface }]} 
-            onPress={handleEmergencyCall} 
+          <TouchableOpacity
+            style={[styles.emergencyActionCard, { borderColor: activeColors.emergency, backgroundColor: activeColors.surface }]}
+            onPress={handleEmergencyCall}
             activeOpacity={0.8}
           >
             <View style={[styles.actionIconCircle, { backgroundColor: activeColors.emergencyBg }]}>
@@ -504,24 +1042,24 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
           </TouchableOpacity>
 
           {/* Alerta SOS */}
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[
-              styles.emergencyActionCard, 
+              styles.emergencyActionCard,
               { borderColor: activeColors.sos, backgroundColor: activeColors.surface },
               sosActive && { backgroundColor: '#fff7ed' }
-            ]} 
-            onPress={handleSosPress} 
+            ]}
+            onPress={handleSosPress}
             activeOpacity={0.8}
           >
             <View style={[
-              styles.actionIconCircle, 
+              styles.actionIconCircle,
               { backgroundColor: activeColors.sosBg },
               sosActive && { backgroundColor: '#ffedd5' }
             ]}>
-              <Feather 
-                name="alert-triangle" 
-                size={26} 
-                color={sosActive ? '#c2410c' : activeColors.sos} 
+              <Feather
+                name="alert-triangle"
+                size={26}
+                color={sosActive ? '#c2410c' : activeColors.sos}
               />
             </View>
             <Text style={[styles.actionCardTitle, { fontSize: getFontSize(12, fontSizeMultiplier) }, sosActive && { color: '#c2410c' }]}>
@@ -533,9 +1071,9 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
           </TouchableOpacity>
 
           {/* Contactar Cuidador */}
-          <TouchableOpacity 
-            style={[styles.emergencyActionCard, { borderColor: activeColors.caregiver, backgroundColor: activeColors.surface }]} 
-            onPress={handleContactCaregiver} 
+          <TouchableOpacity
+            style={[styles.emergencyActionCard, { borderColor: activeColors.caregiver, backgroundColor: activeColors.surface }]}
+            onPress={handleContactCaregiver}
             activeOpacity={0.8}
           >
             <View style={[styles.actionIconCircle, { backgroundColor: activeColors.caregiverBg }]}>
@@ -558,105 +1096,163 @@ function SeniorInicio({ setTab, fontSizeMultiplier, activeColors, name, avatar }
 // ===============================================================================
 // 2. SUB-PANTALLA: SALUD (CON GRÁFICOS REALES E INTERACTIVOS)
 // ===============================================================================
-function SeniorSalud({ setTab, fontSizeMultiplier, activeColors }: SeniorTabProps) {
-  
-  // Datos Reales para LineChart (Gifted Charts)
-  const lineData = [
-    { value: 72, label: 'Lun' },
-    { value: 75, label: 'Mar' },
-    { value: 70, label: 'Mié' },
-    { value: 85, label: 'Jue' },
-    { value: 72, label: 'Vie' },
-    { value: 74, label: 'Sáb' },
-    { value: 72, label: 'Hoy' }
-  ];
+function SeniorSalud({
+  setTab,
+  fontSizeMultiplier,
+  activeColors,
+  clinicalRecords,
+  heartRateRecords,
+  averageBpmHistory = [],
+  averageOxygenHistory = [],
+  averageStressHistory = [],
+  latestO2 = null,
+  latestStress = null
+}: SeniorTabProps & {
+  averageOxygenHistory?: any[];
+  averageStressHistory?: any[];
+  latestO2?: number | null;
+  latestStress?: number | null;
+}) {
+  const insets = useSafeAreaInsets();
 
-  // Datos Reales para BarChart (Gifted Charts)
-  const barData = [
-    { value: 40, label: 'Lun', frontColor: activeColors.primaryLight },
-    { value: 55, label: 'Mar', frontColor: activeColors.primaryLight },
-    { value: 35, label: 'Mié', frontColor: activeColors.primaryLight },
-    { value: 15, label: 'Jue', frontColor: activeColors.emergency }, // Zonas de baja actividad sedentaria
-    { value: 50, label: 'Vie', frontColor: activeColors.primaryLight },
-    { value: 65, label: 'Sáb', frontColor: activeColors.primaryLight },
-    { value: 60, label: 'Hoy', frontColor: activeColors.primary }    // Hoy activo
-  ];
+  // Datos dinámicos para LineChart (Gifted Charts) desde frecuencia cardíaca SQLite
+  const lineData = averageBpmHistory;
+
+  // Obtener la última medición clínica real de SQLite
+  const latestClinico = clinicalRecords && clinicalRecords.length > 0
+    ? clinicalRecords[clinicalRecords.length - 1]
+    : null;
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollPadding, { paddingBottom: 110 + insets.bottom }]} showsVerticalScrollIndicator={false}>
       <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(26, fontSizeMultiplier) }]}>
         Mi Salud
       </Text>
 
-      {/* Gráfico de Línea Real de Pulso (react-native-gifted-charts) */}
+      {/* Gráfico 1: Pulso Semanal Promedio (Curva lpm) */}
       <View style={[styles.chartCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
         <Text style={[styles.chartLabel, { color: activeColors.textSecondary, fontSize: getFontSize(13, fontSizeMultiplier) }]}>
           Pulso Semanal Promedio (Curva lpm)
         </Text>
         <View style={styles.giftedChartWrapper}>
-          <LineChart
-            data={lineData}
-            color={activeColors.heart}
-            thickness={3.5}
-            noOfSections={3}
-            areaChart
-            startFillColor={`${activeColors.heart}35`}
-            endFillColor={`${activeColors.heart}01`}
-            dataPointsColor={activeColors.heart}
-            yAxisColor="transparent"
-            xAxisColor={activeColors.border}
-            yAxisTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
-            xAxisLabelTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
-            height={110}
-            width={width - 100}
-            spacing={34}
-            initialSpacing={14}
-            hideDataPoints={false}
-            dataPointsRadius={4.5}
-            curved
-          />
+          {lineData.length > 0 ? (
+            <LineChart
+              data={lineData}
+              color={activeColors.heart}
+              thickness={3.5}
+              noOfSections={3}
+              areaChart
+              startFillColor={`${activeColors.heart}35`}
+              endFillColor={`${activeColors.heart}01`}
+              dataPointsColor={activeColors.heart}
+              yAxisColor="transparent"
+              xAxisColor={activeColors.border}
+              yAxisTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
+              xAxisLabelTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
+              height={110}
+              width={width - 100}
+              spacing={34}
+              initialSpacing={14}
+              hideDataPoints={false}
+              dataPointsRadius={4.5}
+              curved
+            />
+          ) : (
+            <View style={{ height: 110, justifyContent: 'center', alignItems: 'center' }}>
+              <Text style={{ color: activeColors.textMuted, fontSize: 13 }}>Esperando datos...</Text>
+            </View>
+          )}
         </View>
       </View>
 
-      {/* Gráfico de Barras de Actividad Física (react-native-gifted-charts) */}
+      {/* Gráfico 2: Saturación de Oxígeno Semanal Promedio (SpO2 %) */}
       <View style={[styles.chartCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
         <Text style={[styles.chartLabel, { color: activeColors.textSecondary, fontSize: getFontSize(13, fontSizeMultiplier) }]}>
-          Actividad Física Semanal (Minutos Activos)
+          Saturación de Oxígeno Semanal Promedio (SpO2 %)
         </Text>
         <View style={styles.giftedChartWrapper}>
-          <BarChart
-            data={barData}
-            barWidth={18}
-            noOfSections={3}
-            barBorderRadius={4}
-            yAxisColor="transparent"
-            xAxisColor={activeColors.border}
-            yAxisTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
-            xAxisLabelTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
-            height={110}
-            width={width - 100}
-            spacing={20}
-            initialSpacing={14}
-          />
+          {averageOxygenHistory.length > 0 ? (
+            <LineChart
+              data={averageOxygenHistory}
+              color={activeColors.oxygen}
+              thickness={3.5}
+              noOfSections={3}
+              areaChart
+              startFillColor={`${activeColors.oxygen}35`}
+              endFillColor={`${activeColors.oxygen}01`}
+              dataPointsColor={activeColors.oxygen}
+              yAxisColor="transparent"
+              xAxisColor={activeColors.border}
+              yAxisTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
+              xAxisLabelTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
+              height={110}
+              width={width - 100}
+              spacing={34}
+              initialSpacing={14}
+              hideDataPoints={false}
+              dataPointsRadius={4.5}
+              curved
+            />
+          ) : (
+            <View style={{ height: 110, justifyContent: 'center', alignItems: 'center' }}>
+              <Text style={{ color: activeColors.textMuted, fontSize: 13 }}>Esperando datos...</Text>
+            </View>
+          )}
+        </View>
+      </View>
+
+      {/* Gráfico 3: Nivel de Estrés Semanal Promedio (Nivel %) */}
+      <View style={[styles.chartCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+        <Text style={[styles.chartLabel, { color: activeColors.textSecondary, fontSize: getFontSize(13, fontSizeMultiplier) }]}>
+          Nivel de Estrés Semanal Promedio (Nivel %)
+        </Text>
+        <View style={styles.giftedChartWrapper}>
+          {averageStressHistory.length > 0 ? (
+            <BarChart
+              data={averageStressHistory.map((item, idx) => ({
+                ...item,
+                frontColor: idx === averageStressHistory.length - 1 ? '#ef4444' : '#fee2e2'
+              }))}
+              barWidth={18}
+              noOfSections={3}
+              barBorderRadius={4}
+              yAxisColor="transparent"
+              xAxisColor={activeColors.border}
+              yAxisTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
+              xAxisLabelTextStyle={{ color: activeColors.textMuted, fontSize: 9 }}
+              height={110}
+              width={width - 100}
+              spacing={20}
+              initialSpacing={14}
+            />
+          ) : (
+            <View style={{ height: 110, justifyContent: 'center', alignItems: 'center' }}>
+              <Text style={{ color: activeColors.textMuted, fontSize: 13 }}>Esperando datos...</Text>
+            </View>
+          )}
         </View>
       </View>
 
       {/* Grilla de Métricas Detalladas */}
       <View style={styles.gridContainer}>
         <View style={styles.gridRow}>
-          
+
           <View style={[styles.gridItem, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
             <Text style={[styles.gridLabel, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
               PRESIÓN ARTERIAL
             </Text>
             <Text style={[styles.gridValue, { color: activeColors.textPrimary, fontSize: getFontSize(20, fontSizeMultiplier) }]}>
-              ... / ...
+              {latestClinico ? `${latestClinico.sistolica}/${latestClinico.diastolica}` : '-- / --'}
             </Text>
             <Text style={[styles.gridSub, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
               mmHg · Manual
             </Text>
-            <Text style={[styles.gridStatusOk, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
-              Esperando datos...
+            <Text style={[
+              styles.gridStatusOk,
+              { fontSize: getFontSize(11, fontSizeMultiplier) },
+              latestClinico ? { color: activeColors.primaryDark, fontWeight: '700' } : { color: activeColors.textSecondary }
+            ]}>
+              {latestClinico ? 'Medido recientemente' : 'Esperando datos...'}
             </Text>
           </View>
 
@@ -665,57 +1261,98 @@ function SeniorSalud({ setTab, fontSizeMultiplier, activeColors }: SeniorTabProp
               GLUCOSA
             </Text>
             <Text style={[styles.gridValue, { color: activeColors.textPrimary, fontSize: getFontSize(20, fontSizeMultiplier) }]}>
-              ...
+              {latestClinico ? `${latestClinico.glucosa}` : '--'}
             </Text>
             <Text style={[styles.gridSub, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
               mg/dL · Manual
             </Text>
-            <Text style={[styles.gridStatusOk, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
-              Esperando datos...
+            <Text style={[
+              styles.gridStatusOk,
+              { fontSize: getFontSize(11, fontSizeMultiplier) },
+              latestClinico ? { color: activeColors.primaryDark, fontWeight: '700' } : { color: activeColors.textSecondary }
+            ]}>
+              {latestClinico ? 'Medido recientemente' : 'Esperando datos...'}
             </Text>
           </View>
 
         </View>
 
         <View style={styles.gridRow}>
-          
+
           <View style={[styles.gridItem, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
             <Text style={[styles.gridLabel, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
               OXÍGENO
             </Text>
             <Text style={[styles.gridValue, { color: activeColors.textPrimary, fontSize: getFontSize(20, fontSizeMultiplier) }]}>
-              ...
+              {latestO2 !== null ? `${latestO2}%` : '--'}
             </Text>
             <Text style={[styles.gridSub, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
               SpO2 · Wearable
             </Text>
-            <Text style={[styles.gridStatusOk, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
-              Esperando datos...
+            <Text style={[
+              styles.gridStatusOk,
+              { fontSize: getFontSize(11, fontSizeMultiplier) },
+              latestO2 !== null ? { color: activeColors.primaryDark, fontWeight: '700' } : { color: activeColors.textSecondary }
+            ]}>
+              {latestO2 !== null ? 'Estable' : 'Esperando datos...'}
             </Text>
           </View>
 
           <View style={[styles.gridItem, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
             <Text style={[styles.gridLabel, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
-              UBICACIÓN
+              TEMPERATURA
             </Text>
             <Text style={[styles.gridValue, { color: activeColors.textPrimary, fontSize: getFontSize(20, fontSizeMultiplier) }]}>
-              ...
+              {latestClinico ? `${latestClinico.temperatura} °C` : '--'}
             </Text>
             <Text style={[styles.gridSub, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
-              GPS Activo
+              Celsius · Manual
             </Text>
-            <Text style={[styles.gridStatusOk, { color: activeColors.textSecondary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
-              Esperando datos...
+            <Text style={[
+              styles.gridStatusOk,
+              { fontSize: getFontSize(11, fontSizeMultiplier) },
+              latestClinico ? { color: activeColors.primaryDark, fontWeight: '700' } : { color: activeColors.textSecondary }
+            ]}>
+              {latestClinico ? 'Normal' : 'Esperando datos...'}
             </Text>
+          </View>
+
+        </View>
+
+        <View style={styles.gridRow}>
+
+          <View style={[styles.gridItem, { backgroundColor: activeColors.surface, borderColor: activeColors.border, flex: 1 }]}>
+            <Text style={[styles.gridLabel, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              ESTRÉS
+            </Text>
+            {(() => {
+              const stressInfo = getStressInfo(latestStress);
+              return (
+                <>
+                  <Text style={[styles.gridValue, { color: activeColors.textPrimary, fontSize: getFontSize(20, fontSizeMultiplier) }]}>
+                    {latestStress !== null ? `${latestStress}% ${stressInfo.emoji}` : '--'}
+                  </Text>
+                  <Text style={[styles.gridSub, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+                    Nivel · Wearable
+                  </Text>
+                  <Text style={[
+                    styles.gridStatusOk,
+                    { fontSize: getFontSize(11, fontSizeMultiplier), color: stressInfo.color, fontWeight: '700' }
+                  ]}>
+                    {latestStress !== null ? stressInfo.category : 'Esperando datos...'}
+                  </Text>
+                </>
+              );
+            })()}
           </View>
 
         </View>
       </View>
 
       {/* Botón para navegar a Registro */}
-      <TouchableOpacity 
-        style={[styles.actionButton, { backgroundColor: activeColors.primary, shadowColor: activeColors.primaryShadow }]} 
-        onPress={() => setTab('registro')} 
+      <TouchableOpacity
+        style={[styles.actionButton, { backgroundColor: activeColors.primary, shadowColor: activeColors.primaryShadow }]}
+        onPress={() => setTab && setTab('registro')}
         activeOpacity={0.85}
       >
         <Feather name="plus" size={20} color="#ffffff" style={{ marginRight: 6 }} />
@@ -727,31 +1364,115 @@ function SeniorSalud({ setTab, fontSizeMultiplier, activeColors }: SeniorTabProp
   );
 }
 
+interface SeniorRegistroProps extends SeniorTabProps {
+  rut: string;
+  refreshClinicalData: () => void;
+  bpm: number | null;
+  oxygen: number | null;
+  stress: number | null;
+  activityState: ActivityState;
+  avatar?: string;
+}
+
 // ===============================================================================
 // 3. SUB-PANTALLA: REGISTRO DE DATOS
 // ===============================================================================
-function SeniorRegistro({ setTab, fontSizeMultiplier, activeColors }: SeniorTabProps) {
+function SeniorRegistro({ 
+  setTab, 
+  fontSizeMultiplier, 
+  activeColors, 
+  rut, 
+  refreshClinicalData,
+  bpm,
+  oxygen,
+  stress,
+  activityState,
+  avatar = '👴'
+}: SeniorRegistroProps) {
+  const insets = useSafeAreaInsets();
   const [systolic, setSystolic] = useState('');
   const [diastolic, setDiastolic] = useState('');
   const [glucose, setGlucose] = useState('');
   const [temp, setTemp] = useState('');
   const [notes, setNotes] = useState('');
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
-  const handleSave = () => {
-    if (!systolic || !diastolic || !glucose || !temp) {
-      Alert.alert('Faltan Datos', 'Por favor ingresa todos tus valores de salud antes de guardar.');
+  const getFontSize = (base: number, mult: number) => Math.round(base * mult);
+
+  const handleSave = async () => {
+    const sist = parseInt(systolic, 10);
+    const diast = parseInt(diastolic, 10);
+    const gluc = parseInt(glucose, 10);
+    const tempVal = parseFloat(temp);
+
+    if (isNaN(sist) || isNaN(diast) || isNaN(gluc) || isNaN(tempVal)) {
+      Alert.alert('Faltan Datos o Son Inválidos', 'Por favor ingresa todos tus valores de salud con valores numéricos válidos antes de guardar.');
       return;
     }
-    // TODO: CONEXIÓN BACKEND - Enviar mediciones clínicas
-    Alert.alert(
-      'Registro Guardado',
-      `Tus mediciones se han registrado con éxito localmente (Pendiente Backend):\n\n· Presión: ${systolic}/${diastolic} mmHg\n· Glucosa: ${glucose} mg/dL\n· Temperatura: ${temp} °C`,
-      [{ text: 'Excelente', onPress: () => setTab('salud') }]
-    );
+
+    const db = getDB();
+    const timestamp = new Date().toISOString();
+
+    try {
+      // 1. Save manual clinical record
+      await db.runAsync(
+        `INSERT INTO registro_clinico (adulto_rut, sistolica, diastolica, glucosa, temperatura, notas, timestamp)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [rut, sist, diast, gluc, tempVal, notes.trim() || null, timestamp]
+      );
+
+      // 2. Save health snapshot into registro_medico_historico
+      const now = new Date();
+      const day = String(now.getDate()).padStart(2, '0');
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const year = now.getFullYear();
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const fechaStr = `${day}/${month}/${year}`;
+      const horaStr = `${hours}:${minutes}`;
+
+      await db.runAsync(
+        `INSERT INTO registro_medico_historico (userId, fecha, hora, bpm, spo2, estres, actividad, comentarios)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          rut,
+          fechaStr,
+          horaStr,
+          bpm || 72,
+          oxygen || 98,
+          stress !== null ? stress : 35,
+          activityState || 'Sedentario',
+          notes.trim() || 'Chequeo rutinario manual'
+        ]
+      );
+
+      Alert.alert(
+        'Registro Guardado',
+        `Tus mediciones se han registrado con éxito localmente:\n\n· Presión: ${sist}/${diast} mmHg\n· Glucosa: ${gluc} mg/dL\n· Temperatura: ${tempVal} °C\n\nSnapshot de salud creado en tu historial.`,
+        [{
+          text: 'Excelente',
+          onPress: () => {
+            // Recargar datos y volver a la pestaña Salud
+            refreshClinicalData();
+            if (setTab) setTab('salud');
+
+            // Limpiar inputs
+            setSystolic('');
+            setDiastolic('');
+            setGlucose('');
+            setTemp('');
+            setNotes('');
+          }
+        }]
+      );
+    } catch (error) {
+      console.error('Error saving clinical record and snapshot:', error);
+      Alert.alert('Error', 'Hubo un problema al guardar las mediciones en la base de datos.');
+    }
   };
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollPadding, { paddingBottom: 110 + insets.bottom }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
       <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(26, fontSizeMultiplier) }]}>
         Ingresar Datos
       </Text>
@@ -764,7 +1485,7 @@ function SeniorRegistro({ setTab, fontSizeMultiplier, activeColors }: SeniorTabP
       </View>
 
       <View style={[styles.formContainer, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
-        
+
         {/* Presión Sistólica */}
         <View style={styles.formRow}>
           <View style={styles.formLabelRow}>
@@ -869,9 +1590,9 @@ function SeniorRegistro({ setTab, fontSizeMultiplier, activeColors }: SeniorTabP
         </View>
       </View>
 
-      <TouchableOpacity 
-        style={[styles.saveButton, { backgroundColor: activeColors.primary, shadowColor: activeColors.primaryShadow }]} 
-        onPress={handleSave} 
+      <TouchableOpacity
+        style={[styles.saveButton, { backgroundColor: activeColors.primary, shadowColor: activeColors.primaryShadow }]}
+        onPress={handleSave}
         activeOpacity={0.85}
       >
         <Text style={[styles.saveButtonText, { fontSize: getFontSize(17, fontSizeMultiplier) }]}>
@@ -885,137 +1606,309 @@ function SeniorRegistro({ setTab, fontSizeMultiplier, activeColors }: SeniorTabP
 // ===============================================================================
 // 4. SUB-PANTALLA: DISPOSITIVO BLE
 // ===============================================================================
-interface SeniorDispositivosProps {
-  fontSizeMultiplier: number;
-  activeColors: any;
+interface SeniorDispositivosProps extends SeniorTabProps {
+  rut: string;
+  bleStatus: ConnectionStatus;
+  bleDevice: any;
+  bpm: number | null;
+  oxygen: number | null;
 }
 
-function SeniorDispositivo({ fontSizeMultiplier, activeColors }: SeniorDispositivosProps) {
-  const [scanning, setScanning] = useState(false);
+function SeniorDispositivo({ fontSizeMultiplier, activeColors, rut, bleStatus, bleDevice, bpm, oxygen }: SeniorDispositivosProps) {
+  const insets = useSafeAreaInsets();
+  const [hcSupported, setHcSupported] = useState<boolean | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo>({
+    manufacturer: null, model: null, firmware: null, batteryLevel: null,
+    rssi: null, connectedSince: null, discoveredServices: []
+  });
 
-  const handleScan = () => {
-    setScanning(true);
-    setTimeout(() => {
-      setScanning(false);
-      Alert.alert('Búsqueda Finalizada', 'No se encontraron nuevos dispositivos BLE.', [{ text: 'OK' }]);
-    }, 2000);
+  useEffect(() => {
+    // Check if Health Connect is supported/installed
+    healthConnectService.isAvailable().then(avail => {
+      setHcSupported(avail);
+    });
+
+    // Subscribe to device/service info
+    const unsub = healthConnectService.addDeviceInfoListener((info) => {
+      setDeviceInfo(info);
+    });
+
+    setLastSyncTime(healthConnectService.getLastSyncTime());
+
+    return unsub;
+  }, [bleStatus]);
+
+  const handleRequestPermissions = async () => {
+    const granted = await healthConnectService.requestPermissions();
+    if (granted) {
+      Alert.alert('Sincronización Iniciada', 'Permisos concedidos con éxito. Sincronizando datos...');
+      await healthConnectService.fetchLatestHealthData(rut);
+      setLastSyncTime(healthConnectService.getLastSyncTime());
+    } else {
+      Alert.alert(
+        'Permiso Requerido',
+        'No se concedieron los permisos necesarios. Habilita los permisos en la app de Health Connect.'
+      );
+    }
+  };
+
+  const handleSyncNow = async () => {
+    setSyncing(true);
+    const success = await healthConnectService.fetchLatestHealthData(rut);
+    setSyncing(false);
+    setLastSyncTime(healthConnectService.getLastSyncTime());
+    if (success) {
+      Alert.alert('Datos Sincronizados', 'Los datos biométricos han sido importados con éxito desde Google Health Connect.');
+    } else {
+      Alert.alert('Sin Datos Nuevos', 'No se encontraron registros de las últimas 24 horas en Health Connect.');
+    }
+  };
+
+  const handleDisconnect = () => {
+    Alert.alert(
+      'Desvincular Health Connect',
+      '¿Estás seguro de que deseas desconectar y desactivar la sincronización de Health Connect?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Desvincular',
+          onPress: async () => {
+            await healthConnectService.unpairDevice(rut);
+            setLastSyncTime(null);
+            Alert.alert('Desvinculado', 'Se ha cancelado la sincronización con Health Connect.');
+          }
+        }
+      ]
+    );
+  };
+
+  const handleToggleSimulated = () => {
+    if (healthConnectService.getIsSimulated()) {
+      healthConnectService.stopSimulatedMode();
+      Alert.alert('Simulador Desactivado', 'El simulador de signos vitales se ha apagado.');
+    } else {
+      healthConnectService.startSimulatedMode(rut);
+      Alert.alert('Simulador Activado', 'Generando mediciones de pulso y oxígeno simulados.');
+    }
   };
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollPadding, { paddingBottom: 110 + insets.bottom }]} showsVerticalScrollIndicator={false}>
       <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(26, fontSizeMultiplier) }]}>
-        Dispositivo BLE
+        Sincronización de Salud
       </Text>
 
-      {/* Escáner */}
-      <View style={[styles.bleScannerCard, { backgroundColor: activeColors.primaryLight, borderColor: activeColors.border }]}>
+      {/* Explicación de la sincronización nativa */}
+      <View style={[styles.bleScannerCard, { backgroundColor: activeColors.primaryLight, borderColor: activeColors.border, padding: 18, borderRadius: 20 }]}>
         <View style={[styles.bleRadarCircle, { backgroundColor: activeColors.primary, shadowColor: activeColors.primary }]}>
-          <Feather name="radio" size={32} color="#ffffff" />
+          <Feather name="refresh-cw" size={28} color="#ffffff" />
         </View>
-        {scanning ? (
-          <View>
-            <ActivityIndicator size="small" color={activeColors.primaryDark} style={{ marginBottom: 4 }} />
-            <Text style={[styles.bleScanTitle, { color: activeColors.primaryDark, fontSize: getFontSize(16, fontSizeMultiplier) }]}>
-              Buscando dispositivos...
-            </Text>
-          </View>
-        ) : (
-          <Text style={[styles.bleScanTitle, { color: activeColors.primaryDark, fontSize: getFontSize(16, fontSizeMultiplier) }]}>
-            Buscador de Wearables Activo
-          </Text>
-        )}
-        <Text style={[styles.bleScanSub, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
-          Mantén encendido el Bluetooth de tu teléfono
+        <Text style={[styles.bleScanTitle, { color: activeColors.primaryDark, fontSize: getFontSize(16, fontSizeMultiplier), fontWeight: '700', textAlign: 'center', marginTop: 8 }]}>
+          Google Health Connect
+        </Text>
+        <Text style={[styles.bleScanSub, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier), textAlign: 'center', marginTop: 4, lineHeight: 18 }]}>
+          Tu reloj se sincroniza de forma nativa con el sistema operativo a través de su propia aplicación (como Mi Fitness) y esta deposita los datos en Health Connect.
         </Text>
       </View>
 
-      {/* Dispositivo Vinculado */}
+      {/* Estado del Sincronizador */}
       <View style={styles.pairedContainer}>
         <Text style={[styles.bleSectionTitle, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
-          DISPOSITIVO VINCULADO
+          ESTADO DE LA CONEXIÓN
         </Text>
-        <View style={[styles.pairedCard, { backgroundColor: activeColors.primaryLight, borderColor: activeColors.border }]}>
-          <View style={styles.pairedRow}>
-            <View style={[styles.watchIconContainer, { backgroundColor: activeColors.surface }]}>
-              <Feather name="watch" size={20} color={activeColors.textMuted} />
+
+        {hcSupported === false ? (
+          // Health Connect no disponible
+          <View style={[styles.pairedCard, { backgroundColor: '#fef2f2', borderColor: '#fee2e2' }]}>
+            <View style={styles.pairedRow}>
+              <View style={[styles.watchIconContainer, { backgroundColor: '#fee2e2' }]}>
+                <Feather name="alert-circle" size={20} color="#ef4444" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.pairedName, { color: '#b91c1c', fontSize: getFontSize(14, fontSizeMultiplier), fontWeight: '700' }]}>
+                  Health Connect No Disponible
+                </Text>
+                <Text style={[styles.pairedStatus, { color: '#b91c1c', fontSize: getFontSize(11, fontSizeMultiplier), marginTop: 2 }]}>
+                  No compatible en este dispositivo (iOS o emulador sin soporte). Los signos vitales se simularán de forma automática.
+                </Text>
+              </View>
             </View>
-            <View>
-              <Text style={[styles.pairedName, { color: activeColors.primaryDark, fontSize: getFontSize(15, fontSizeMultiplier) }]}>
-                Ningún dispositivo vinculado
+            <TouchableOpacity
+              style={[styles.pairButton, { backgroundColor: healthConnectService.getIsSimulated() ? activeColors.emergency : activeColors.primary, marginTop: 12 }]}
+              onPress={handleToggleSimulated}
+            >
+              <Text style={[styles.pairButtonText, { color: '#ffffff', fontSize: getFontSize(12, fontSizeMultiplier), textAlign: 'center' }]}>
+                {healthConnectService.getIsSimulated() ? 'Desactivar Simulador' : 'Activar Simulador'}
               </Text>
-              <Text style={[styles.pairedStatus, { color: activeColors.primary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
-                Desconectado · Esperando datos...
+            </TouchableOpacity>
+          </View>
+        ) : bleStatus === 'Conectado' ? (
+          // Conectado y Sincronizado
+          <View style={[styles.pairedCard, { backgroundColor: activeColors.primaryLight, borderColor: activeColors.primary }]}>
+            <View style={styles.pairedRow}>
+              <View style={[styles.watchIconContainer, { backgroundColor: activeColors.surface }]}>
+                <Feather name="check-circle" size={20} color={activeColors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.pairedName, { color: activeColors.primaryDark, fontSize: getFontSize(15, fontSizeMultiplier), fontWeight: '700' }]}>
+                  {healthConnectService.getIsSimulated() ? 'Simulador Activo' : 'Sincronizado'}
+                </Text>
+                <Text style={[styles.pairedStatus, { color: activeColors.primaryDark, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+                  {healthConnectService.getIsSimulated()
+                    ? 'Generando signos vitales simulados periódicamente.'
+                    : 'Conexión establecida con Health Connect.'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+              {!healthConnectService.getIsSimulated() && (
+                <TouchableOpacity
+                  style={[styles.pairButton, { backgroundColor: activeColors.primary, flex: 1 }]}
+                  onPress={handleSyncNow}
+                  disabled={syncing}
+                >
+                  {syncing ? (
+                    <ActivityIndicator size="small" color="#ffffff" />
+                  ) : (
+                    <Text style={[styles.pairButtonText, { color: '#ffffff', fontSize: getFontSize(12, fontSizeMultiplier), textAlign: 'center' }]}>
+                      Sincronizar Ahora
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[styles.pairButton, { backgroundColor: activeColors.emergency, flex: healthConnectService.getIsSimulated() ? 1 : 0.8 }]}
+                onPress={healthConnectService.getIsSimulated() ? handleToggleSimulated : handleDisconnect}
+              >
+                <Text style={[styles.pairButtonText, { color: '#ffffff', fontSize: getFontSize(12, fontSizeMultiplier), textAlign: 'center' }]}>
+                  {healthConnectService.getIsSimulated() ? 'Desactivar Simulador' : 'Desvincular'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : bleStatus === 'Conectando' ? (
+          // Sincronizando en progreso
+          <View style={[styles.pairedCard, { backgroundColor: activeColors.oxygenLight, borderColor: activeColors.border }]}>
+            <View style={styles.pairedRow}>
+              <ActivityIndicator size="small" color={activeColors.oxygen} style={{ marginRight: 10 }} />
+              <View>
+                <Text style={[styles.pairedName, { color: activeColors.textPrimary, fontSize: getFontSize(14, fontSizeMultiplier), fontWeight: '700' }]}>
+                  Sincronizando...
+                </Text>
+                <Text style={[styles.pairedStatus, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+                  Consultando base de datos de Google Health Connect...
+                </Text>
+              </View>
+            </View>
+          </View>
+        ) : (
+          // Desconectado o Requiere Permisos
+          <View style={[styles.pairedCard, { backgroundColor: '#f1f5f9', borderColor: activeColors.border }]}>
+            <View style={styles.pairedRow}>
+              <View style={[styles.watchIconContainer, { backgroundColor: activeColors.surface }]}>
+                <Feather name="refresh-cw" size={20} color={activeColors.textMuted} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.pairedName, { color: activeColors.textSecondary, fontSize: getFontSize(14, fontSizeMultiplier), fontWeight: '600' }]}>
+                  Sin Vinculación Activa
+                </Text>
+                <Text style={[styles.pairedStatus, { color: activeColors.textMuted, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
+                  Requiere otorgar permisos de lectura de salud para funcionar.
+                </Text>
+              </View>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+              <TouchableOpacity
+                style={[styles.pairButton, { backgroundColor: activeColors.primary, flex: 1.2 }]}
+                onPress={handleRequestPermissions}
+              >
+                <Text style={[styles.pairButtonText, { color: '#ffffff', fontSize: getFontSize(12, fontSizeMultiplier), textAlign: 'center' }]}>
+                  Vincular Health Connect
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.pairButton, { backgroundColor: activeColors.textSecondary, flex: 0.8 }]}
+                onPress={handleToggleSimulated}
+              >
+                <Text style={[styles.pairButtonText, { color: '#ffffff', fontSize: getFontSize(12, fontSizeMultiplier), textAlign: 'center' }]}>
+                  Simular
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+
+      {/* Visualización de Datos Biométricos Sincronizados */}
+      <View style={styles.foundContainer}>
+        <Text style={[styles.bleSectionTitle, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+          ÚLTIMOS SIGNOS VITALES IMPORTADOS (24 HORAS)
+        </Text>
+
+        <View style={{ gap: 10, marginTop: 8 }}>
+          {/* Card de Frecuencia Cardíaca */}
+          <View style={[styles.deviceCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 16, borderWidth: 1 }]}>
+            <View style={[styles.deviceCardLeft, { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }]}>
+              <View style={[styles.deviceIconBg, { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: activeColors.heartLight }]}>
+                <Feather name="heart" size={18} color={activeColors.heart} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: activeColors.textPrimary, fontSize: getFontSize(14, fontSizeMultiplier), fontWeight: '700' }}>
+                  Frecuencia Cardíaca (Pulso)
+                </Text>
+                <Text style={{ color: activeColors.textMuted, fontSize: getFontSize(11, fontSizeMultiplier), marginTop: 2 }}>
+                  Health Connect · Últimas 24 horas
+                </Text>
+              </View>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={{ color: activeColors.heart, fontSize: getFontSize(22, fontSizeMultiplier), fontWeight: '800' }}>
+                {bpm !== null ? `${bpm}` : '--'}
+              </Text>
+              <Text style={{ color: activeColors.textMuted, fontSize: getFontSize(9, fontSizeMultiplier) }}>
+                lpm
               </Text>
             </View>
           </View>
-          <View style={[styles.onlineIndicator, { backgroundColor: '#94a3b8' }]} />
-        </View>
-      </View>
 
-      {/* Encontrados */}
-      <View style={styles.foundContainer}>
-        <View style={styles.foundHeader}>
-          <Text style={[styles.bleSectionTitle, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
-            DISPOSITIVOS ENCONTRADOS
-          </Text>
-          <TouchableOpacity onPress={handleScan} disabled={scanning} activeOpacity={0.7}>
-            <Text style={[styles.scanBtnText, { color: activeColors.primary }, scanning && { opacity: 0.5 }, { fontSize: getFontSize(12, fontSizeMultiplier) }]}>
-              {scanning ? 'Escaneando...' : 'Escanear'}
+          {/* Card de Saturación de Oxígeno (SpO2) */}
+          <View style={[styles.deviceCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 16, borderWidth: 1 }]}>
+            <View style={[styles.deviceCardLeft, { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }]}>
+              <View style={[styles.deviceIconBg, { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: activeColors.oxygenLight }]}>
+                <Feather name="wind" size={18} color={activeColors.oxygen} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: activeColors.textPrimary, fontSize: getFontSize(14, fontSizeMultiplier), fontWeight: '700' }}>
+                  Saturación de Oxígeno (SpO2)
+                </Text>
+                <Text style={{ color: activeColors.textMuted, fontSize: getFontSize(11, fontSizeMultiplier), marginTop: 2 }}>
+                  Health Connect · Últimas 24 horas
+                </Text>
+              </View>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={{ color: activeColors.oxygen, fontSize: getFontSize(22, fontSizeMultiplier), fontWeight: '800' }}>
+                {oxygen !== null ? `${oxygen}` : '--'}
+              </Text>
+              <Text style={{ color: activeColors.textMuted, fontSize: getFontSize(9, fontSizeMultiplier) }}>
+                %
+              </Text>
+            </View>
+          </View>
+
+          {/* Banner de última sincronización */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 12, gap: 6 }}>
+            <Feather name="clock" size={12} color={activeColors.textMuted} />
+            <Text style={{ fontSize: getFontSize(11, fontSizeMultiplier), color: activeColors.textMuted }}>
+              Última Sincronización: {lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Ninguna'}
             </Text>
-          </TouchableOpacity>
-        </View>
-        
-        <View style={styles.devicesList}>
-          <DeviceCard name="Mi Band 6 (Simulado)" desc="Señal fuerte · BLE GATT 0x180D" activeColors={activeColors} fontSizeMultiplier={fontSizeMultiplier} />
-          <DeviceCard name="Apple Watch SE (Simulado)" desc="Señal media · BLE GATT 0x180D" activeColors={activeColors} fontSizeMultiplier={fontSizeMultiplier} />
+          </View>
         </View>
       </View>
     </ScrollView>
-  );
-}
-
-// Tarjeta de Dispositivo BLE
-interface DeviceCardProps {
-  name: string;
-  desc: string;
-  activeColors: any;
-  fontSizeMultiplier: number;
-}
-
-function DeviceCard({ name, desc, activeColors, fontSizeMultiplier }: DeviceCardProps) {
-  const [paired, setPaired] = useState(false);
-
-  const handlePair = () => {
-    setPaired(true);
-    Alert.alert('Dispositivo Vinculado', `Te has conectado correctamente a: ${name}`, [{ text: 'Entendido' }]);
-  };
-
-  return (
-    <View style={[styles.deviceCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
-      <View style={styles.deviceCardLeft}>
-        <View style={styles.deviceIconBg}>
-          <Feather name="watch" size={18} color={activeColors.oxygen} />
-        </View>
-        <View>
-          <Text style={[styles.deviceName, { color: activeColors.textPrimary, fontSize: getFontSize(14, fontSizeMultiplier) }]}>
-            {name}
-          </Text>
-          <Text style={[styles.deviceDesc, { color: activeColors.textMuted, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
-            {desc}
-          </Text>
-        </View>
-      </View>
-      <TouchableOpacity 
-        style={[styles.pairButton, { backgroundColor: activeColors.primary }, paired && { backgroundColor: activeColors.border }]} 
-        onPress={handlePair}
-        disabled={paired}
-        activeOpacity={0.7}
-      >
-        <Text style={[styles.pairButtonText, { fontSize: getFontSize(12, fontSizeMultiplier) }, paired && { color: activeColors.textMuted }]}>
-          {paired ? 'Vinculado' : 'Vincular'}
-        </Text>
-      </TouchableOpacity>
-    </View>
   );
 }
 
@@ -1023,6 +1916,7 @@ function DeviceCard({ name, desc, activeColors, fontSizeMultiplier }: DeviceCard
 // 5. SUB-PANTALLA: CONFIGURACIÓN Y ACCESIBILIDAD (NUEVA PESTAÑA)
 // ===============================================================================
 interface SeniorConfiguracionProps {
+  rut: string;
   name: string;
   setName: (n: string) => void;
   email: string;
@@ -1034,9 +1928,11 @@ interface SeniorConfiguracionProps {
   colorblindMode: boolean;
   setColorblindMode: (c: boolean) => void;
   activeColors: any;
+  onProfileUpdated: () => void;
 }
 
 function SeniorConfiguracion({
+  rut,
   name,
   setName,
   email,
@@ -1048,32 +1944,69 @@ function SeniorConfiguracion({
   colorblindMode,
   setColorblindMode,
   activeColors,
+  onProfileUpdated,
 }: SeniorConfiguracionProps) {
-  
+  const insets = useSafeAreaInsets();
+  const { updateSessionName } = useAuth();
   const [pass, setPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
 
   const avataresDisponibles = ['👴', '👵', '👨', '👩', '👤', '❤️'];
 
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
     if (!name || !email) {
       Alert.alert('Datos Incompletos', 'El nombre y el correo no pueden estar vacíos.');
+      return;
+    }
+    if (pass && pass.length < 6) {
+      Alert.alert('Seguridad', 'La contraseña debe tener al menos 6 caracteres.');
       return;
     }
     if (pass && pass !== confirmPass) {
       Alert.alert('Seguridad', 'Las contraseñas ingresadas no coinciden.');
       return;
     }
-    // TODO: CONEXIÓN BACKEND - Actualizar credenciales en la base de datos
-    Alert.alert(
-      'Configuración Guardada', 
-      'Tus cambios de perfil y accesibilidad se han guardado con éxito.', 
-      [{ text: 'Aceptar' }]
-    );
+
+    const db = getDB();
+    try {
+      // 1. Update nombres and email in adulto_mayor table
+      await db.runAsync(
+        "UPDATE adulto_mayor SET nombres = ?, email = ? WHERE rut = ?",
+        [name, email, rut]
+      );
+
+      // 2. If password was typed, hash and update users table
+      if (pass) {
+        const hashedPassword = sha256(pass);
+        await db.runAsync(
+          "UPDATE users SET psswd_hash = ? WHERE rut = ?",
+          [hashedPassword, rut]
+        );
+      }
+
+      // 3. Update reactively in AuthContext so the top bar updates
+      updateSessionName(name);
+
+      // 4. Trigger profile re-fetch in senior.tsx
+      onProfileUpdated();
+
+      Alert.alert(
+        'Configuración Guardada',
+        'Tus cambios de perfil y accesibilidad se han guardado con éxito.',
+        [{ text: 'Aceptar' }]
+      );
+
+      // Clear password fields
+      setPass('');
+      setConfirmPass('');
+    } catch (error) {
+      console.error('Error saving profile changes:', error);
+      Alert.alert('Error', 'Hubo un problema al guardar los cambios en la base de datos.');
+    }
   };
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollPadding, { paddingBottom: 110 + insets.bottom }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
       <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(26, fontSizeMultiplier) }]}>
         Configuración
       </Text>
@@ -1082,19 +2015,19 @@ function SeniorConfiguracion({
       <Text style={[styles.settingsGroupTitle, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
         PERFIL DE USUARIO
       </Text>
-      
+
       <View style={[styles.settingsCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
-        
+
         {/* Selector de Avatar */}
         <Text style={[styles.formLabel, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier), marginBottom: 8 }]}>
           Foto de Perfil (Selecciona tu Avatar)
         </Text>
         <View style={styles.avatarPickerRow}>
           {avataresDisponibles.map((av) => (
-            <TouchableOpacity 
-              key={av} 
+            <TouchableOpacity
+              key={av}
               style={[
-                styles.avatarPickerItem, 
+                styles.avatarPickerItem,
                 avatar === av && { borderColor: activeColors.primary, backgroundColor: activeColors.primaryLight }
               ]}
               onPress={() => setAvatar(av)}
@@ -1140,7 +2073,7 @@ function SeniorConfiguracion({
       </Text>
 
       <View style={[styles.settingsCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
-        
+
         {/* Tamaño de Letra Segmentado */}
         <View style={styles.settingsOptionRow}>
           <View style={{ flex: 1 }}>
@@ -1152,50 +2085,50 @@ function SeniorConfiguracion({
             </Text>
           </View>
         </View>
-        
+
         <View style={styles.fontScaleSegmentContainer}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[
-              styles.fontScaleSegment, 
+              styles.fontScaleSegment,
               fontSizeMultiplier === 1.0 && { backgroundColor: activeColors.primary, borderColor: activeColors.primary }
             ]}
             onPress={() => setFontSizeMultiplier(1.0)}
           >
             <Text style={[
-              styles.segmentText, 
-              { fontSize: 12 }, 
+              styles.segmentText,
+              { fontSize: 12 },
               fontSizeMultiplier === 1.0 && { color: '#ffffff', fontWeight: '700' }
             ]}>
               Normal
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[
-              styles.fontScaleSegment, 
+              styles.fontScaleSegment,
               fontSizeMultiplier === 1.2 && { backgroundColor: activeColors.primary, borderColor: activeColors.primary }
             ]}
             onPress={() => setFontSizeMultiplier(1.2)}
           >
             <Text style={[
-              styles.segmentText, 
-              { fontSize: 14 }, 
+              styles.segmentText,
+              { fontSize: 14 },
               fontSizeMultiplier === 1.2 && { color: '#ffffff', fontWeight: '700' }
             ]}>
               Grande
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[
-              styles.fontScaleSegment, 
+              styles.fontScaleSegment,
               fontSizeMultiplier === 1.4 && { backgroundColor: activeColors.primary, borderColor: activeColors.primary }
             ]}
             onPress={() => setFontSizeMultiplier(1.4)}
           >
             <Text style={[
-              styles.segmentText, 
-              { fontSize: 16 }, 
+              styles.segmentText,
+              { fontSize: 16 },
               fontSizeMultiplier === 1.4 && { color: '#ffffff', fontWeight: '700' }
             ]}>
               Extra G.
@@ -1231,7 +2164,7 @@ function SeniorConfiguracion({
       </Text>
 
       <View style={[styles.settingsCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
-        
+
         {/* Nueva Contraseña */}
         <View style={styles.settingsFormRow}>
           <Text style={[styles.formLabel, { color: activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier), marginBottom: 6 }]}>
@@ -1268,9 +2201,9 @@ function SeniorConfiguracion({
       </View>
 
       {/* Guardar Perfil */}
-      <TouchableOpacity 
-        style={[styles.saveButton, { backgroundColor: activeColors.primary, shadowColor: activeColors.primaryShadow, marginTop: 10 }]} 
-        onPress={handleSaveProfile} 
+      <TouchableOpacity
+        style={[styles.saveButton, { backgroundColor: activeColors.primary, shadowColor: activeColors.primaryShadow, marginTop: 10 }]}
+        onPress={handleSaveProfile}
         activeOpacity={0.85}
       >
         <Text style={[styles.saveButtonText, { fontSize: getFontSize(17, fontSizeMultiplier) }]}>
@@ -1332,7 +2265,7 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 110, // Espacio para el Navbar flotante de 5 botones
   },
-  
+
   // Navbar inferior responsivo (5 Botones)
   navbar: {
     position: 'absolute',
@@ -1525,10 +2458,11 @@ const styles = StyleSheet.create({
   },
   metricsGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
   },
   metricCard: {
-    flex: 1,
+    width: (width - 50) / 2,
     borderRadius: 24,
     paddingVertical: 18,
     paddingHorizontal: 8,
@@ -1749,6 +2683,17 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
   },
+  historyBtn: {
+    borderWidth: 2,
+    borderRadius: 20,
+    paddingVertical: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  historyBtnText: {
+    fontWeight: '700',
+  },
 
   // 4. BLE STYLES
   bleScannerCard: {
@@ -1793,9 +2738,9 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderRadius: 20,
     padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 12,
   },
   pairedRow: {
     flexDirection: 'row',
@@ -1822,6 +2767,13 @@ const styles = StyleSheet.create({
   },
   foundContainer: {
     marginBottom: 12,
+  },
+  bleInfoCard: {
+    borderWidth: 1.5,
+    borderRadius: 20,
+    padding: 18,
+    marginTop: 4,
+    marginBottom: 20,
   },
   foundHeader: {
     flexDirection: 'row',

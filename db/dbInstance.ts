@@ -1,6 +1,5 @@
 import * as SQLite from 'expo-sqlite';
 
-
 let instance: SQLite.SQLiteDatabase | null = null;
 
 export function getDB(): SQLite.SQLiteDatabase {

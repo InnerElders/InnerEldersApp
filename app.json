@@ -19,7 +19,20 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "android.permission.health.READ_HEART_RATE",
+        "android.permission.health.READ_OXYGEN_SATURATION",
+        "androidx.health.permission.HeartRate.read",
+        "androidx.health.permission.OxygenSaturation.read"
+      ],
+      "package": "com.anonymous.InnerEldersAppSetup",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDF9kslTdC26V1UkXhsJvSHcKe-bSToYLg"
+        }
+      }
     },
     "web": {
       "output": "static",
@@ -40,7 +53,25 @@
         }
       ],
       "expo-sqlite",
-      "react-native-ble-plx"
+      [
+        "expo-health-connect",
+        {
+          "permissions": [
+            "READ_HEART_RATE",
+            "READ_OXYGEN_SATURATION"
+          ]
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "minSdkVersion": 26
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

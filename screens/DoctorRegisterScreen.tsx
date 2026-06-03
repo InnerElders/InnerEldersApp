@@ -1,8 +1,14 @@
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import React, { useState } from 'react';
+import { authController } from '@/db/controllers/authController';
+import { useAuth } from '@/contexts/AuthContext';
+import { formatRut } from '@/utils/rutFormatter';
 import {
+    Alert,
+    FlatList,
     KeyboardAvoidingView,
+    Modal,
     Platform,
     SafeAreaView,
     ScrollView,
@@ -20,6 +26,7 @@ interface FormState {
     apellidos: string;
     rut: string;
     password: string;
+    genero: string;
 }
 
 // ─── Paleta de colores consistente con la aplicación ─────────────────────────
@@ -47,8 +54,11 @@ export default function DoctorRegisterScreen() {
         apellidos: '',
         rut: '',
         password: '',
+        genero: '',
     });
     const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
+    const [modalVisible, setModalVisible] = useState(false);
+    const [modalData, setModalData] = useState<string[]>([]);
 
     const updateField = (field: keyof FormState, value: string): void => {
         setForm(prev => ({ ...prev, [field]: value }));
@@ -66,6 +76,9 @@ export default function DoctorRegisterScreen() {
         }
         if (!form.apellidos.trim()) {
             newErrors.apellidos = 'El apellido es requerido';
+        }
+        if (!form.genero) {
+            newErrors.genero = 'El género es requerido';
         }
 
         // Validación de RUT (máx 12 caracteres, formato X.XXX.XXX-X o XX.XXX.XXX-X)
@@ -86,11 +99,40 @@ export default function DoctorRegisterScreen() {
         return Object.keys(newErrors).length === 0;
     };
 
-    const handleRegister = (): void => {
-        if (validate()) {
+    const { login } = useAuth();
+
+    const handleRegister = async (): Promise<void> => {
+        if (!validate()) return;
+        
+        try {
             console.log('Registrando Médico:', form);
-            alert('¡Registro de Médico exitoso!');
-            router.replace('/');
+            await authController.registerDoctor({
+                rut: form.rut.trim(),
+                nombres: form.nombres.trim(),
+                apellidos: form.apellidos.trim(),
+                psswd: form.password,
+                genero: form.genero,
+            });
+            
+            Alert.alert('Registro Exitoso', '¡Registro de Médico exitoso!');
+            
+            // Auto-login
+            const loginRes = await login(form.rut.trim(), form.password);
+            if (loginRes.success) {
+                router.replace('/doctor' as any);
+            } else {
+                router.replace('/');
+            }
+        } catch (err: any) {
+            console.error('Doctor registration failed:', err);
+            if (err.message && err.message.includes('UNIQUE constraint failed: users.rut')) {
+                Alert.alert(
+                    'RUT ya registrado',
+                    'El RUT ingresado ya se encuentra registrado en el sistema. Intente iniciar sesión o recupere sus credenciales.'
+                );
+            } else {
+                Alert.alert('Error', err.message || 'Error al registrar médico');
+            }
         }
     };
 
@@ -158,6 +200,24 @@ export default function DoctorRegisterScreen() {
                         </View>
                     </View>
 
+                    <View style={styles.inputWrapper}>
+                        <Text style={styles.label}>Género</Text>
+                        <TouchableOpacity
+                            style={[styles.dropdown, errors.genero && styles.inputError]}
+                            onPress={() => {
+                                setModalData(['Masculino', 'Femenino', 'Prefiero no decirlo', 'Otro']);
+                                setModalVisible(true);
+                            }}
+                            activeOpacity={0.7}
+                        >
+                            <Text style={form.genero ? styles.dropdownText : styles.dropdownPlaceholder}>
+                                {form.genero || 'Seleccionar Género'}
+                            </Text>
+                            <Feather name="chevron-down" size={20} color={COLORS.textMuted} />
+                        </TouchableOpacity>
+                        {errors.genero && <Text style={styles.errorText}>{errors.genero}</Text>}
+                    </View>
+
                     <SectionLabel text="Datos de Acceso" withTopMargin />
 
                     <View style={styles.inputWrapper}>
@@ -167,7 +227,7 @@ export default function DoctorRegisterScreen() {
                             placeholder="Ej: 12.345.678-9"
                             placeholderTextColor={COLORS.textMuted}
                             value={form.rut}
-                            onChangeText={v => updateField('rut', v)}
+                            onChangeText={v => updateField('rut', formatRut(v))}
                             autoCapitalize="characters"
                             returnKeyType="next"
                         />
@@ -199,6 +259,42 @@ export default function DoctorRegisterScreen() {
 
                 </ScrollView>
             </KeyboardAvoidingView>
+
+            {/* Modal de selección de género */}
+            <Modal
+                visible={modalVisible}
+                transparent
+                animationType="slide"
+                onRequestClose={() => setModalVisible(false)}
+            >
+                <TouchableOpacity
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
+                    onPress={() => setModalVisible(false)}
+                >
+                    <View style={styles.modalContent}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Seleccionar Género</Text>
+                        </View>
+                        <FlatList
+                            data={modalData}
+                            keyExtractor={item => item}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity
+                                    style={styles.modalItem}
+                                    onPress={() => {
+                                        updateField('genero', item);
+                                        setModalVisible(false);
+                                    }}
+                                >
+                                    <Text style={styles.modalItemText}>{item}</Text>
+                                </TouchableOpacity>
+                            )}
+                            showsVerticalScrollIndicator={false}
+                        />
+                    </View>
+                </TouchableOpacity>
+            </Modal>
         </SafeAreaView>
     );
 }
@@ -357,5 +453,58 @@ const styles = StyleSheet.create({
         fontSize: 17,
         fontWeight: '700',
         letterSpacing: 0.2,
+    },
+    dropdown: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        width: '100%',
+        paddingHorizontal: 16,
+        paddingVertical: 16,
+        borderRadius: 18,
+        backgroundColor: COLORS.surface,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+    },
+    dropdownText: {
+        fontSize: 14,
+        color: COLORS.textPrimary,
+    },
+    dropdownPlaceholder: {
+        fontSize: 14,
+        color: COLORS.textMuted,
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.4)',
+        justifyContent: 'flex-end',
+    },
+    modalContent: {
+        backgroundColor: COLORS.background,
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        maxHeight: '60%',
+        paddingBottom: Platform.OS === 'ios' ? 40 : 20,
+    },
+    modalHeader: {
+        padding: 20,
+        borderBottomWidth: 1,
+        borderBottomColor: COLORS.border,
+        alignItems: 'center',
+    },
+    modalTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: COLORS.textPrimary,
+    },
+    modalItem: {
+        paddingVertical: 16,
+        paddingHorizontal: 24,
+        borderBottomWidth: 1,
+        borderBottomColor: COLORS.border,
+    },
+    modalItemText: {
+        fontSize: 15,
+        color: COLORS.textPrimary,
     },
 });
