@@ -1,9 +1,8 @@
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import React, { useState } from 'react';
-import { adultController } from '@/services/adultDB';
-import { doctorController } from '@/services/doctorDB';
-import { caregiverController } from '@/services/caregiverDB';
+import { useAuth } from '@/contexts/AuthContext';
+import { formatRut } from '@/utils/rutFormatter';
 
 import {
     KeyboardAvoidingView,
@@ -83,29 +82,27 @@ export default function LoginScreen() {
     const [rut, setRut] = useState<string>('');
     const [password, setPassword] = useState<string>('');
     const [logoPressCount, setLogoPressCount] = useState<number>(0);
+    const { login } = useAuth();
+
     const handleLogin = async (): Promise<void> => {
-      let user = null;
-
-      if (selectedRole === 'senior') {
-        user = await adultController.getByRut(rut);
-      } else if (selectedRole === 'doctor') {
-        user = await doctorController.getByRut(rut);
-      } else {
-        user = await caregiverController.getByRut(rut);
-      }
-
-      if (!user || user.psswd !== password) {
-        alert('Credenciales incorrectas');
+      if (!rut.trim() || !password) {
+        alert('Por favor, ingresa tu RUT y contraseña');
         return;
       }
 
-      console.log('Iniciando sesión como:', selectedRole);
-      if (selectedRole === 'senior') {
-          router.replace('/senior' as any);
-      } else if (selectedRole === 'caregiver') {
-          router.replace('/caregiver' as any);
+      const res = await login(rut.trim(), password);
+
+      if (res.success) {
+        console.log('Sesión iniciada con éxito. Rol:', res.role);
+        if (res.role === 'adulto_mayor') {
+            router.replace('/senior' as any);
+        } else if (res.role === 'cuidador') {
+            router.replace('/caregiver' as any);
+        } else if (res.role === 'medico') {
+            router.replace('/doctor' as any);
+        }
       } else {
-          router.replace('/doctor' as any);
+        alert(res.error || 'Credenciales incorrectas');
       }
     };
 
@@ -173,7 +170,7 @@ export default function LoginScreen() {
                             autoCapitalize="characters"
                             autoCorrect={false}
                             value={rut}
-                            onChangeText={setRut}
+                            onChangeText={(text) => setRut(formatRut(text))}
                             returnKeyType="next"
                         />
                         <TextInput

@@ -1,11 +1,12 @@
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import React, { useState } from 'react';
-import { adultController } from '@/services/adultDB';
-import { doctorController } from '@/services/doctorDB';
-import { caregiverController } from '@/services/caregiverDB';
+import { authController } from '@/db/controllers/authController';
+import { useAuth } from '@/contexts/AuthContext';
+import { formatRut } from '@/utils/rutFormatter';
 
 import {
+    Alert,
     FlatList,
     KeyboardAvoidingView,
     Modal,
@@ -34,6 +35,7 @@ interface FormState {
     comuna: string;
     rut: string;
     password: string;
+    genero: string;
 }
 
 const REGION_COMUNAS: Record<string, string[]> = {
@@ -87,12 +89,14 @@ export default function RegisterScreen() {
         comuna: '',
         rut: '',
         password: '',
+        genero: '',
     });
     const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
+    const { login } = useAuth();
 
     const [modalVisible, setModalVisible] = useState(false);
     const [modalData, setModalData] = useState<string[]>([]);
-    const [modalTarget, setModalTarget] = useState<'region' | 'comuna' | null>(null);
+    const [modalTarget, setModalTarget] = useState<'region' | 'comuna' | 'genero' | null>(null);
 
     const updateField = (field: keyof FormState, value: string): void => {
         setForm(prev => ({ ...prev, [field]: value }));
@@ -124,6 +128,7 @@ export default function RegisterScreen() {
 
         if (!form.region) newErrors.region = 'Requerido';
         if (!form.comuna) newErrors.comuna = 'Requerido';
+        if (!form.genero) newErrors.genero = 'Requerido';
 
         // Validación de RUT (máx 12 caracteres, formato X.XXX.XXX-X o XX.XXX.XXX-X)
         if (!form.rut || form.rut.length > 12 || !/^[0-9]{1,2}\.[0-9]{3}\.[0-9]{3}-[0-9kK]$/.test(form.rut)) {
@@ -142,65 +147,63 @@ export default function RegisterScreen() {
     const handleRegister = async (): Promise<void> => {
       if (!validate()) return;
 
-      const { email, nombres, apellidos, diaNac, mesNac, anioNac, region, comuna, rut, password } = form;
+      const { email, nombres, apellidos, diaNac, mesNac, anioNac, region, comuna, rut, password, genero } = form;
       const telefonoEmergencia = 0;
-      const latitudSegura = 0.0;
-      const longitudSegura = 0.0;
-      const radioSeguro = 0.0;
 
-      const fullRut = `${rut}`;
-      const fullDate = `${diaNac}/${mesNac}/${anioNac}`;
-      const regionComuna = `${region} - ${comuna}`;
+      const fullRut = rut.trim();
+      const pad = (num: string) => num.padStart(2, '0');
+      const fullDate = `${anioNac}-${pad(mesNac)}-${pad(diaNac)}`; // ISO YYYY-MM-DD
+      const regionComuna = `${region}, ${comuna}`; // Región, Comuna
 
       try {
         if (role === 'senior') {
-          await adultController.create({
+          await authController.registerAdult({
             rut: fullRut,
-            nombres: nombres,
-            apellidos: apellidos,
-            email: email || null,
+            nombres: nombres.trim(),
+            apellidos: apellidos.trim(),
+            email: email.trim() || null,
             nacimiento: fullDate,
             residencia: regionComuna,
             telefono_emergencia: telefonoEmergencia,
-            latitud_segura: latitudSegura,
-            longitud_segura: longitudSegura,
-            radio_seguro: radioSeguro,
             psswd: password,
-          });
-        } else if (role === 'doctor') {
-          await doctorController.create({
-            rut: fullRut,
-            nombres: nombres,
-            apellidos: apellidos,
-            email: email || null,
-            nacimiento: fullDate,
-            residencia: regionComuna,
-            pacientes: '[]',
-            psswd: password,
+            genero: genero,
           });
         } else if (role === 'caregiver') {
-          await caregiverController.create({
+          await authController.registerCaregiver({
             rut: fullRut,
-            nombres: nombres,
-            apellidos: apellidos,
-            email: email || null,
+            nombres: nombres.trim(),
+            apellidos: apellidos.trim(),
+            email: email.trim() || null,
             nacimiento: fullDate,
             residencia: regionComuna,
-            tipo_cuidador: 'Familiar',
-            pacientes: '[]',
+            tipo_cuidador: 'Familiar', // Default type
             psswd: password,
+            genero: genero,
           });
         }
+
+        // Auto-login to populate AuthContext
+        const loginRes = await login(fullRut, password);
         
-        if (role === 'senior') {
-          router.replace('/senior' as any);
-        } else if (role === 'caregiver') {
-          router.replace('/caregiver' as any);
+        if (loginRes.success) {
+          if (role === 'senior') {
+            router.replace('/senior' as any);
+          } else if (role === 'caregiver') {
+            router.replace('/caregiver' as any);
+          }
         } else {
-          router.replace('/doctor' as any);
+          router.replace('/');
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Registration failed:', err);
+        if (err.message && err.message.includes('UNIQUE constraint failed: users.rut')) {
+          Alert.alert(
+            'RUT ya registrado',
+            'El RUT ingresado ya se encuentra registrado en el sistema. Intente iniciar sesión o recupere sus credenciales.'
+          );
+        } else {
+          Alert.alert('Error', err.message || 'Error al registrar el usuario');
+        }
       }
     };
 
@@ -208,7 +211,7 @@ export default function RegisterScreen() {
         router.back();
     };
 
-    const openModal = (target: 'region' | 'comuna') => {
+    const openModal = (target: 'region' | 'comuna' | 'genero') => {
         if (target === 'comuna' && !form.region) return;
 
         setModalTarget(target);
@@ -216,6 +219,8 @@ export default function RegisterScreen() {
             setModalData(Object.keys(REGION_COMUNAS));
         } else if (target === 'comuna') {
             setModalData(REGION_COMUNAS[form.region] || []);
+        } else if (target === 'genero') {
+            setModalData(['Masculino', 'Femenino', 'Prefiero no decirlo', 'Otro']);
         }
         setModalVisible(true);
     };
@@ -226,6 +231,8 @@ export default function RegisterScreen() {
             updateField('comuna', ''); // Reiniciar comuna al cambiar de región
         } else if (modalTarget === 'comuna') {
             updateField('comuna', item);
+        } else if (modalTarget === 'genero') {
+            updateField('genero', item);
         }
         setModalVisible(false);
     };
@@ -377,6 +384,20 @@ export default function RegisterScreen() {
                         {errors.comuna && <Text style={styles.errorText}>{errors.comuna}</Text>}
                     </View>
 
+                    <View style={styles.inputWrapper}>
+                        <TouchableOpacity
+                            style={[styles.dropdown, errors.genero && styles.inputError]}
+                            onPress={() => openModal('genero')}
+                            activeOpacity={0.7}
+                        >
+                            <Text style={form.genero ? styles.dropdownText : styles.dropdownPlaceholder}>
+                                {form.genero || 'Seleccionar Género'}
+                            </Text>
+                            <Feather name="chevron-down" size={20} color={COLORS.textMuted} />
+                        </TouchableOpacity>
+                        {errors.genero && <Text style={styles.errorText}>{errors.genero}</Text>}
+                    </View>
+
                     <SectionLabel text="Datos de Acceso" withTopMargin />
 
                     <View style={styles.inputWrapper}>
@@ -385,7 +406,7 @@ export default function RegisterScreen() {
                             placeholder="RUT (Ej: 12.345.678-9)"
                             placeholderTextColor={COLORS.textMuted}
                             value={form.rut}
-                            onChangeText={v => updateField('rut', v)}
+                            onChangeText={v => updateField('rut', formatRut(v))}
                             autoCapitalize="characters"
                             returnKeyType="next"
                         />
@@ -431,10 +452,14 @@ export default function RegisterScreen() {
                 >
                     <View style={styles.modalContent}>
                         <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>
-                                {modalTarget === 'region' ? 'Seleccionar Región' : 'Seleccionar Comuna'}
-                            </Text>
-                        </View>
+                        <Text style={styles.modalTitle}>
+                            {modalTarget === 'region' 
+                                ? 'Seleccionar Región' 
+                                : modalTarget === 'comuna' 
+                                    ? 'Seleccionar Comuna' 
+                                    : 'Seleccionar Género'}
+                        </Text>
+                    </View>
                         <FlatList
                             data={modalData}
                             keyExtractor={item => item}

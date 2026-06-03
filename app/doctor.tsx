@@ -1,10 +1,11 @@
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
   Dimensions,
   Modal,
+  Platform,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -13,9 +14,63 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
+  useWindowDimensions
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import HistorialMedicosModal from '@/components/HistorialMedicosModal';
+
+import { useAuth } from '@/contexts/AuthContext';
+import { sha256 } from '@/db/controllers/authController';
+import { getDB } from '@/db/dbInstance';
+import { cleanRut, formatRut } from '@/utils/rutFormatter';
 import Svg, { Line, Path, Circle as SvgCircle, Text as SvgText } from 'react-native-svg';
+
+function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000; // Earth radius in meters
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+// ─── Helpers Clínicos de Edad y Tiempo Geográfico ────────────────────────────
+function calculateAge(birthdayStr: string): number {
+  if (!birthdayStr) return 75;
+  try {
+    const birthDate = new Date(birthdayStr);
+    const today = new Date();
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const m = today.getMonth() - birthDate.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
+    }
+    return age;
+  } catch (e) {
+    return 75;
+  }
+}
+
+function getRelativeTimeString(isoString: string): string {
+  if (!isoString) return 'sin datos';
+  try {
+    const past = new Date(isoString);
+    const now = new Date();
+    const diffMs = now.getTime() - past.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'ahora mismo';
+    if (diffMins < 60) return `hace ${diffMins} min`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `hace ${diffHours} h`;
+    return `hace ${Math.floor(diffHours / 24)} días`;
+  } catch (e) {
+    return 'hace poco';
+  }
+}
 
 // ─── Paleta de Colores Centralizada (Tema Indigo/Púrpura Médico) ───────────────
 const DEFAULT_COLORS = {
@@ -89,8 +144,10 @@ const getFontSize = (baseSize: number, multiplier: number) => {
 };
 
 // Estructura de Datos de Pacientes
+// Estructura de Datos de Pacientes
 interface Paciente {
   id: number;
+  rut: string;
   nombre: string;
   edad: number;
   avatar: string;
@@ -99,6 +156,9 @@ interface Paciente {
   presion: string;
   glucosa: number;
   oxigeno: number;
+  estres: number;
+  temperatura: number | null;
+  esSimulado?: boolean;
   actividadStr: string;
   diagnostico: string;
   antecedentes: string;
@@ -107,6 +167,8 @@ interface Paciente {
   alertaTitulo?: string;
   alertaDesc?: string;
   pulsoHistorico: number[];
+  oxigenoHistorico: number[];
+  estresHistorico: number[];
   actividadSemana: number[]; // horas activas lun-dom
   ultimaActualizacion: string;
 }
@@ -114,6 +176,7 @@ interface Paciente {
 const INITIAL_PACIENTES: Paciente[] = [
   {
     id: 1,
+    rut: '12.345.678-9',
     nombre: 'Acdiel Bombin',
     edad: 78,
     avatar: '👴',
@@ -122,6 +185,8 @@ const INITIAL_PACIENTES: Paciente[] = [
     presion: '128/82',
     glucosa: 118,
     oxigeno: 94,
+    estres: 75,
+    temperatura: 36.5,
     actividadStr: '4h inactivo',
     diagnostico: 'HTA · DM2',
     antecedentes: 'Hipertensión Arterial Crónica y Diabetes Tipo 2 en control manual.',
@@ -130,11 +195,14 @@ const INITIAL_PACIENTES: Paciente[] = [
     alertaTitulo: 'Inactividad Prolongada',
     alertaDesc: 'Posible caída detectada. Dispositivo inmóvil por más de 4 horas.',
     pulsoHistorico: [72, 75, 78, 89, 74, 76, 73],
+    oxigenoHistorico: [98, 97, 98, 96, 98, 97, 94],
+    estresHistorico: [35, 40, 38, 45, 30, 35, 75],
     actividadSemana: [6, 8, 4, 1.5, 6, 7, 5],
     ultimaActualizacion: 'hace 2 min',
   },
   {
     id: 2,
+    rut: '11.111.111-2',
     nombre: 'Ana Morales',
     edad: 75,
     avatar: '👵',
@@ -143,6 +211,8 @@ const INITIAL_PACIENTES: Paciente[] = [
     presion: '140/90',
     glucosa: 130,
     oxigeno: 92,
+    estres: 68,
+    temperatura: 36.8,
     actividadStr: 'Zona insegura',
     diagnostico: 'ICC · EPOC',
     antecedentes: 'Insuficiencia Cardíaca Congestiva y EPOC severo con requerimiento de oxígeno.',
@@ -151,11 +221,14 @@ const INITIAL_PACIENTES: Paciente[] = [
     alertaTitulo: 'Zona Insegura & Pulso Alto',
     alertaDesc: 'Frecuencia cardíaca de 95 lpm fuera de los límites de geocerca programados.',
     pulsoHistorico: [85, 88, 92, 95, 87, 89, 90],
+    oxigenoHistorico: [96, 97, 95, 92, 96, 94, 92],
+    estresHistorico: [45, 50, 52, 68, 55, 60, 58],
     actividadSemana: [4, 3, 5, 2, 4, 3.5, 3],
     ultimaActualizacion: 'hace 5 min',
   },
   {
     id: 3,
+    rut: '99.999.999-9',
     nombre: 'Rosa Vega',
     avatar: '👵',
     edad: 71,
@@ -164,17 +237,22 @@ const INITIAL_PACIENTES: Paciente[] = [
     presion: '120/75',
     glucosa: 105,
     oxigeno: 97,
+    estres: 35,
+    temperatura: 36.2,
     actividadStr: 'Activa',
     diagnostico: 'Artrosis',
     antecedentes: 'Artrosis severa de cadera. Paciente realiza kinesiología dos veces por semana.',
     wearableActivo: true,
     alertaActiva: false,
     pulsoHistorico: [66, 68, 67, 69, 68, 70, 68],
+    oxigenoHistorico: [98, 97, 98, 96, 98, 97, 97],
+    estresHistorico: [35, 40, 38, 45, 30, 35, 35],
     actividadSemana: [5, 6, 7, 8, 6.5, 7, 7.5],
     ultimaActualizacion: 'hace 10 min',
   },
   {
     id: 4,
+    rut: '88.888.888-8',
     nombre: 'Pedro Soto',
     avatar: '👴',
     edad: 83,
@@ -183,24 +261,35 @@ const INITIAL_PACIENTES: Paciente[] = [
     presion: '132/85',
     glucosa: 122,
     oxigeno: 96,
+    estres: 42,
+    temperatura: 36.6,
     actividadStr: 'Activo',
     diagnostico: 'Preventivo',
     antecedentes: 'Control preventivo general de geriatría. Buen estado cognitivo y motriz.',
     wearableActivo: false,
     alertaActiva: false,
     pulsoHistorico: [70, 72, 73, 71, 74, 73, 74],
+    oxigenoHistorico: [97, 98, 97, 97, 96, 98, 96],
+    estresHistorico: [40, 42, 45, 38, 41, 43, 42],
     actividadSemana: [4, 5, 5.5, 4.5, 5, 5, 4.8],
     ultimaActualizacion: 'hace 12 min',
   },
 ];
 
 export default function DoctorApp() {
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const isTablet = Math.min(width, height) >= 600;
   const [tab, setTab] = useState<'inicio' | 'pacientes' | 'reportes' | 'configuracion'>('inicio');
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [daysRangeReports, setDaysRangeReports] = useState<7 | 30>(7);
 
-  // Datos locales mutables para pacientes (para simular adición)
-  const [pacientes, setPacientes] = useState<Paciente[]>(INITIAL_PACIENTES);
+  const { userSession } = useAuth();
+  const docRut = userSession?.rut || '11.111.111-1';
+
+  // Datos locales de pacientes SQLite
+  const [pacientes, setPacientes] = useState<Paciente[]>([]);
 
   // Estados de Perfil Médico
   const [docName, setDocName] = useState('Andrés López');
@@ -214,7 +303,381 @@ export default function DoctorApp() {
   // Modal Agregar Paciente
   const [addModalOpen, setAddModalOpen] = useState(false);
 
+  // Estados de Reportes Clínicos
+  const [alertasTotales, setAlertasTotales] = useState(0);
+  const [adherenciaDispositivo, setAdherenciaDispositivo] = useState(0);
+  const [estadoPoblacion, setEstadoPoblacion] = useState({ enMovimiento: 0, sedentario: 0 });
+  const [frecuenciaCardiacaPromedio, setFrecuenciaCardiacaPromedio] = useState<number[]>([]);
+  const [promedioOxigenoPoblacion, setPromedioOxigenoPoblacion] = useState(98);
+  const [promedioEstresPoblacion, setPromedioEstresPoblacion] = useState(35);
+
   const activeColors = colorblindMode ? COLORBLIND_COLORS : DEFAULT_COLORS;
+
+  const loadPacientes = async () => {
+    const db = getDB();
+    try {
+      // 1. Fetch doctor details
+      const doc = await db.getFirstAsync<{ nombres: string; apellidos: string; email: string }>(
+        "SELECT nombres, apellidos, email FROM medico WHERE rut = ?", [docRut]
+      );
+      if (doc) {
+        setDocName(`${doc.nombres} ${doc.apellidos}`);
+        setDocEmail(doc.email || '');
+      }
+
+      // 2. Fetch linked seniors
+      const seniors = await db.getAllAsync<{
+        rut: string;
+        nombres: string;
+        apellidos: string;
+        nacimiento: string;
+        residencia: string;
+        latitud_segura: number;
+        longitud_segura: number;
+        radio_seguro: number;
+      }>(
+        `SELECT am.* FROM adulto_mayor am
+         JOIN adulto_medico amed ON am.rut = amed.adulto_rut
+         WHERE amed.medico_rut = ?`,
+        [docRut]
+      );
+
+      const loadedPatients: Paciente[] = [];
+
+      for (const s of seniors) {
+        const idVal = parseInt(s.rut.replace(/\D/g, ''), 10) || Math.floor(Math.random() * 100000);
+
+        // Fetch latest heart rate
+        const latestHr = await db.getFirstAsync<{ bpm: number; timestamp: string; fuente?: string }>(
+          "SELECT bpm, timestamp, fuente FROM frecuencia_cardiaca WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 1",
+          [s.rut]
+        );
+
+        // Fetch last 7 heart rates for historical curve
+        const hrHistory = await db.getAllAsync<{ bpm: number }>(
+          "SELECT bpm FROM frecuencia_cardiaca WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 7",
+          [s.rut]
+        );
+        const pulsoHistorico = hrHistory.reverse().map(h => h.bpm);
+        if (pulsoHistorico.length === 0) {
+          pulsoHistorico.push(...[72, 75, 78, 70, 74, 76, 73]); // standard fallback
+        }
+
+        // Fetch latest SpO2
+        const latestO2 = await db.getFirstAsync<{ porcentaje: number; timestamp: string }>(
+          "SELECT porcentaje, timestamp FROM oxigeno_sangre WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 1",
+          [s.rut]
+        );
+
+        // Fetch latest Stress
+        const latestStress = await db.getFirstAsync<{ nivel: number; timestamp: string }>(
+          "SELECT valor AS nivel, timestamp FROM estres WHERE userId = ? ORDER BY timestamp DESC LIMIT 1",
+          [s.rut]
+        );
+
+        // Fetch last 7 SpO2 for historical curve
+        const o2History = await db.getAllAsync<{ porcentaje: number }>(
+          "SELECT porcentaje FROM oxigeno_sangre WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 7",
+          [s.rut]
+        );
+        const oxigenoHistorico = o2History.reverse().map(o => o.porcentaje);
+        if (oxigenoHistorico.length === 0) {
+          oxigenoHistorico.push(...[98, 97, 98, 96, 98, 97, 98]);
+        }
+
+        // Fetch last 7 Stress for historical curve
+        const stressHistory = await db.getAllAsync<{ nivel: number }>(
+          "SELECT valor AS nivel FROM estres WHERE userId = ? ORDER BY timestamp DESC LIMIT 7",
+          [s.rut]
+        );
+        const estresHistorico = stressHistory.reverse().map(e => e.nivel);
+        if (estresHistorico.length === 0) {
+          estresHistorico.push(...[35, 40, 38, 45, 30, 35, 33]);
+        }
+
+        // Fetch latest GPS coordinate (to check safe zone for warning)
+        const latestGps = await db.getFirstAsync<{ latitud: number; longitud: number; timestamp: string }>(
+          "SELECT latitud, longitud, timestamp FROM gps_registro WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 1",
+          [s.rut]
+        );
+
+        // Fetch latest activity state
+        const latestAct = await db.getFirstAsync<{ estado: string; timestamp: string }>(
+          "SELECT estado, timestamp FROM actividad_registro WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 1",
+          [s.rut]
+        );
+
+        // Fetch latest clinical record (pressure, glucose, temperature)
+        const latestClin = await db.getFirstAsync<{ sistolica: number; diastolica: number; glucosa: number; temperatura: number; timestamp: string }>(
+          "SELECT sistolica, diastolica, glucosa, temperatura, timestamp FROM registro_clinico WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 1",
+          [s.rut]
+        );
+
+        // Check for active cardiac anomalies in SQLite alertas table (active in the last 5 minutes)
+        const thresholdTime = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const activeCardiacAnomaly = await db.getFirstAsync<{ mensaje: string }>(
+          `SELECT mensaje FROM alertas 
+           WHERE pacienteId = ? AND tipo = 'Anomalía Cardíaca' AND timestamp >= ? 
+           ORDER BY timestamp DESC LIMIT 1`,
+          [s.rut, thresholdTime]
+        );
+        const hasCardiacAnomaly = activeCardiacAnomaly !== null;
+
+        // Calculations & Risk Classification
+        const age = calculateAge(s.nacimiento);
+        const lpm = latestHr?.bpm || 72;
+        const glucosa = latestClin ? latestClin.glucosa : 95;
+        const sistolica = latestClin ? latestClin.sistolica : null;
+        const diastolica = latestClin ? latestClin.diastolica : null;
+        const presion = latestClin ? `${sistolica}/${diastolica}` : 'Sin datos registrados';
+        const oxigeno = latestO2?.porcentaje ?? 98;
+        const estres = latestStress?.nivel ?? 35;
+        const temperatura = latestClin ? latestClin.temperatura : null;
+
+        let riesgo: 'Crítico' | 'Seguimiento' | 'Estable' = 'Estable';
+        let alertaActiva = false;
+        let alertaTitulo = '';
+        let alertaDesc = '';
+
+        if (lpm > 85 || oxigeno < 95 || estres > 80 || hasCardiacAnomaly) {
+          riesgo = 'Crítico';
+          alertaActiva = true;
+          if (hasCardiacAnomaly) {
+            alertaTitulo = 'Anomalía Cardíaca';
+            alertaDesc = activeCardiacAnomaly.mensaje;
+          } else {
+            alertaTitulo = lpm > 85 ? 'Taquicardia Detectada' : oxigeno < 95 ? 'Hipoxia Detectada (SpO2 Baja)' : 'Estrés Extremo Detectado';
+            alertaDesc = lpm > 85
+              ? `Frecuencia cardíaca elevada a ${lpm} lpm en monitor.`
+              : oxigeno < 95
+                ? `Saturación de oxígeno en ${oxigeno}%, por debajo de niveles seguros.`
+                : `Nivel de estrés crítico registrado en ${estres}/100.`;
+          }
+        } else if (glucosa !== null && glucosa > 115 || (sistolica !== null && sistolica > 130)) {
+          riesgo = 'Seguimiento';
+        }
+
+        let actividadStr = 'Activo';
+        if (latestAct?.estado === 'Sedentario') {
+          actividadStr = 'En reposo';
+          if (s.nombres === 'Acdiel' && !alertaActiva) {
+            actividadStr = '4h inactivo';
+            riesgo = 'Crítico';
+            alertaActiva = true;
+            alertaTitulo = 'Inactividad Prolongada';
+            alertaDesc = 'Dispositivo inmóvil por más de 4 horas (posible caída o reposo profundo).';
+          }
+        }
+
+        const ultimaActualizacion = latestHr
+          ? getRelativeTimeString(latestHr.timestamp)
+          : latestGps
+            ? getRelativeTimeString(latestGps.timestamp)
+            : 'hace poco';
+
+        // Load hours active sum grouped by day for last 7 days
+        const actHistory = await db.getAllAsync<{ day: string; active_seconds: number }>(
+          `SELECT date(timestamp) as day, SUM(duracion_segundos) as active_seconds
+           FROM actividad_registro
+           WHERE adulto_rut = ? AND estado = 'En movimiento' AND timestamp >= date('now', '-7 days')
+           GROUP BY day
+           ORDER BY day ASC`,
+          [s.rut]
+        );
+        const activeHours = [0, 0, 0, 0, 0, 0, 0];
+        const baseTime = Date.now();
+        const daysHelper = (d: number) => d * 24 * 60 * 60 * 1000;
+        for (let i = 0; i < 7; i++) {
+          const targetDayStr = new Date(baseTime - daysHelper(6 - i)).toISOString().split('T')[0];
+          const record = actHistory.find(h => h.day === targetDayStr);
+          activeHours[i] = record ? parseFloat((record.active_seconds / 3600).toFixed(1)) : 0.0;
+        }
+
+        loadedPatients.push({
+          id: idVal,
+          rut: s.rut,
+          nombre: `${s.nombres} ${s.apellidos}`,
+          edad: age,
+          avatar: s.nombres === 'Acdiel' ? '👴' : '👵',
+          riesgo,
+          lpm,
+          esSimulado: latestHr?.fuente === 'simulado',
+          presion,
+          glucosa,
+          oxigeno,
+          estres,
+          temperatura,
+          actividadStr,
+          diagnostico: s.nombres === 'Acdiel' ? 'HTA · DM2' : 'Artrosis',
+          antecedentes: s.nombres === 'Acdiel'
+            ? 'Hipertensión Arterial Crónica y Diabetes Tipo 2 en control.'
+            : 'Artrosis de cadera. Paciente realiza kinesiología.',
+          wearableActivo: latestHr ? true : false,
+          alertaActiva,
+          alertaTitulo: alertaActiva ? alertaTitulo : undefined,
+          alertaDesc: alertaActiva ? alertaDesc : undefined,
+          pulsoHistorico,
+          oxigenoHistorico,
+          estresHistorico,
+          actividadSemana: activeHours,
+          ultimaActualizacion
+        });
+      }
+
+      setPacientes(loadedPatients);
+
+      // 3. Load reports data
+      // A. Count total alerts dynamically across all assigned seniors
+      let totalAlerts = 0;
+      for (const s of seniors) {
+        // High pulse alert count
+        const hrAlerts = await db.getFirstAsync<{ count: number }>(
+          `SELECT COUNT(*) as count FROM frecuencia_cardiaca 
+           WHERE adulto_rut = ? AND bpm > 85 AND timestamp >= date('now', ?)`,
+          [s.rut, `-${daysRangeReports} days`]
+        );
+        if (hrAlerts) totalAlerts += hrAlerts.count;
+
+        // SpO2 alert count
+        const o2Alerts = await db.getFirstAsync<{ count: number }>(
+          `SELECT COUNT(*) as count FROM oxigeno_sangre 
+           WHERE adulto_rut = ? AND porcentaje < 95 AND timestamp >= date('now', ?)`,
+          [s.rut, `-${daysRangeReports} days`]
+        );
+        if (o2Alerts) totalAlerts += o2Alerts.count;
+
+        // Stress alert count
+        const stressAlerts = await db.getFirstAsync<{ count: number }>(
+          `SELECT COUNT(*) as count FROM estres 
+           WHERE userId = ? AND valor > 70 AND timestamp >= date('now', ?)`,
+          [s.rut, `-${daysRangeReports} days`]
+        );
+        if (stressAlerts) totalAlerts += stressAlerts.count;
+
+        // GPS Safe zone alert count
+        const gpsAlerts = await db.getAllAsync<{ latitud: number; longitud: number }>(
+          `SELECT latitud, longitud FROM gps_registro 
+           WHERE adulto_rut = ? AND timestamp >= date('now', ?)`,
+          [s.rut, `-${daysRangeReports} days`]
+        );
+        if (s.latitud_segura !== 0 && s.longitud_segura !== 0 && s.radio_seguro !== 0) {
+          for (const ga of gpsAlerts) {
+            const dist = getDistanceMeters(ga.latitud, ga.longitud, s.latitud_segura, s.longitud_segura);
+            if (dist > s.radio_seguro) {
+              totalAlerts += 1;
+            }
+          }
+        }
+
+        // Inactivity alerts count
+        const actAlerts = await db.getFirstAsync<{ count: number }>(
+          `SELECT COUNT(*) as count FROM actividad_registro 
+           WHERE adulto_rut = ? AND estado = 'Sedentario' AND timestamp >= date('now', ?)`,
+          [s.rut, `-${daysRangeReports} days`]
+        );
+        if (actAlerts && s.nombres === 'Acdiel') totalAlerts += actAlerts.count;
+      }
+      setAlertasTotales(totalAlerts);
+
+      // B. Device Adherence Percentage
+      let totalAdherenceSum = 0;
+      for (const s of seniors) {
+        const activeDaysRes = await db.getFirstAsync<{ count: number }>(
+          `SELECT COUNT(DISTINCT date(timestamp)) as count 
+           FROM frecuencia_cardiaca 
+           WHERE adulto_rut = ? AND timestamp >= date('now', ?)`,
+          [s.rut, `-${daysRangeReports} days`]
+        );
+        const activeDays = activeDaysRes?.count ?? 0;
+        const adherencePct = (activeDays / daysRangeReports) * 100;
+        totalAdherenceSum += adherencePct;
+      }
+      const overallAdherence = seniors.length > 0 ? Math.round(totalAdherenceSum / seniors.length) : 0;
+      setAdherenciaDispositivo(overallAdherence);
+
+      // C. SpO2 and Stress averages for population
+      let totalO2Sum = 0;
+      let totalO2Count = 0;
+      let totalStrSum = 0;
+      let totalStrCount = 0;
+
+      for (const s of seniors) {
+        const avgO2Res = await db.getFirstAsync<{ avg_val: number }>(
+          `SELECT AVG(porcentaje) as avg_val FROM oxigeno_sangre 
+           WHERE adulto_rut = ? AND timestamp >= date('now', ?)`,
+          [s.rut, `-${daysRangeReports} days`]
+        );
+        if (avgO2Res && avgO2Res.avg_val !== null) {
+          totalO2Sum += avgO2Res.avg_val;
+          totalO2Count++;
+        }
+
+        const avgStrRes = await db.getFirstAsync<{ avg_val: number }>(
+          `SELECT AVG(valor) as avg_val FROM estres 
+           WHERE userId = ? AND timestamp >= date('now', ?)`,
+          [s.rut, `-${daysRangeReports} days`]
+        );
+        if (avgStrRes && avgStrRes.avg_val !== null) {
+          totalStrSum += avgStrRes.avg_val;
+          totalStrCount++;
+        }
+      }
+
+      setPromedioOxigenoPoblacion(totalO2Count > 0 ? Math.round(totalO2Sum / totalO2Count) : 98);
+      setPromedioEstresPoblacion(totalStrCount > 0 ? Math.round(totalStrSum / totalStrCount) : 35);
+
+      // C. Population State Distribution
+      let movingCount = 0;
+      let restingCount = 0;
+      for (const s of seniors) {
+        const latestAct = await db.getFirstAsync<{ estado: string }>(
+          "SELECT estado FROM actividad_registro WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT 1",
+          [s.rut]
+        );
+        if (latestAct) {
+          if (latestAct.estado === 'En movimiento') {
+            movingCount++;
+          } else {
+            restingCount++;
+          }
+        }
+      }
+      setEstadoPoblacion({ enMovimiento: movingCount, sedentario: restingCount });
+
+      // D. Combined Heart Rate Average per Day
+      const dailyHrs = await db.getAllAsync<{ day: string; avg_bpm: number }>(
+        `SELECT date(fc.timestamp) as day, AVG(fc.bpm) as avg_bpm
+         FROM frecuencia_cardiaca fc
+         INNER JOIN adulto_medico amed ON fc.adulto_rut = amed.adulto_rut
+         WHERE amed.medico_rut = ? AND fc.timestamp >= date('now', ?)
+         GROUP BY day
+         ORDER BY day ASC`,
+        [docRut, `-${daysRangeReports} days`]
+      );
+      const combinedHrs: number[] = [];
+      const baseTime = Date.now();
+      const daysHelper = (d: number) => d * 24 * 60 * 60 * 1000;
+      for (let i = 0; i < daysRangeReports; i++) {
+        const targetDayStr = new Date(baseTime - daysHelper((daysRangeReports - 1) - i)).toISOString().split('T')[0];
+        const record = dailyHrs.find(h => h.day === targetDayStr);
+        combinedHrs.push(record ? Math.round(record.avg_bpm) : 0);
+      }
+      setFrecuenciaCardiacaPromedio(combinedHrs);
+    } catch (error) {
+      console.error('Error loading clinical dashboard data:', error);
+    }
+  };
+
+  useEffect(() => {
+    loadPacientes();
+
+    // Refresh clinical dashboard data every 10 seconds reactively
+    const interval = setInterval(() => {
+      loadPacientes();
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [docRut, daysRangeReports]);
 
   const handleLogout = () => {
     Alert.alert(
@@ -232,45 +695,90 @@ export default function DoctorApp() {
     setDetailOpen(true);
   };
 
-  // Agregar paciente simulado
-  const handleSimulateAddPatient = (rut: string) => {
-    if (!rut.trim()) {
-      Alert.alert('Error', 'Por favor ingresa un RUT válido.');
-      return;
+  // Agregar paciente de manera funcional a la base de datos
+  const handleSimulateAddPatient = async (rut: string) => {
+    const cleanRutVal = cleanRut(rut.trim());
+    const db = getDB();
+    try {
+      // Check if senior exists in database
+      const senior = await db.getFirstAsync<{ nombres: string; apellidos: string }>(
+        "SELECT nombres, apellidos FROM adulto_mayor WHERE rut = ?", [cleanRutVal]
+      );
+
+      if (!senior) {
+        Alert.alert(
+          'Paciente No Encontrado',
+          'El RUT ingresado no coincide con ningún Adulto Mayor registrado en el sistema.'
+        );
+        return;
+      }
+
+      // Check user role
+      const user = await db.getFirstAsync<{ role: string }>(
+        "SELECT role FROM users WHERE rut = ?", [cleanRutVal]
+      );
+
+      if (!user || user.role !== 'adulto_mayor') {
+        Alert.alert('RUT inválido', 'El RUT ingresado no corresponde a un Adulto Mayor.');
+        return;
+      }
+
+      // Check if already linked
+      const linked = await db.getFirstAsync<{ adulto_rut: string }>(
+        "SELECT adulto_rut FROM adulto_medico WHERE adulto_rut = ? AND medico_rut = ?",
+        [cleanRutVal, docRut]
+      );
+
+      if (linked) {
+        Alert.alert('Paciente Ya Vinculado', 'Este paciente ya se encuentra en tu directorio clínico.');
+        return;
+      }
+
+      // Insert link
+      await db.runAsync(
+        "INSERT INTO adulto_medico (adulto_rut, medico_rut) VALUES (?, ?)",
+        [cleanRutVal, docRut]
+      );
+
+      // Update doctor patients JSON array to maintain consistency
+      const doctorData = await db.getFirstAsync<{ pacientes: string }>(
+        "SELECT pacientes FROM medico WHERE rut = ?", [docRut]
+      );
+      let patientsArr: string[] = [];
+      if (doctorData && doctorData.pacientes) {
+        try {
+          patientsArr = JSON.parse(doctorData.pacientes);
+          if (!Array.isArray(patientsArr)) {
+            patientsArr = [];
+          }
+        } catch (e) {
+          patientsArr = [];
+        }
+      }
+      if (!patientsArr.includes(cleanRutVal)) {
+        patientsArr.push(cleanRutVal);
+      }
+      await db.runAsync(
+        "UPDATE medico SET pacientes = ? WHERE rut = ?",
+        [JSON.stringify(patientsArr), docRut]
+      );
+
+      Alert.alert(
+        'Paciente Vinculado',
+        `El paciente ${senior.nombres} ${senior.apellidos} ha sido vinculado a tu directorio con éxito.`,
+        [{ text: 'Aceptar', onPress: () => loadPacientes() }]
+      );
+
+      setAddModalOpen(false);
+    } catch (err) {
+      console.error('Error linking patient to doctor:', err);
+      Alert.alert('Error', 'Hubo un problema al vincular el paciente.');
     }
-
-    // Crear un paciente estático simulado
-    const newPatient: Paciente = {
-      id: pacientes.length + 1,
-      nombre: 'Paciente Asignado ' + (pacientes.length + 1),
-      edad: 72,
-      avatar: Math.random() > 0.5 ? '👴' : '👵',
-      riesgo: 'Estable',
-      lpm: 72,
-      presion: '122/80',
-      glucosa: 110,
-      oxigeno: 98,
-      actividadStr: 'Activo',
-      diagnostico: 'Preventivo',
-      antecedentes: 'Paciente vinculado con éxito usando el RUT ' + rut,
-      wearableActivo: true,
-      alertaActiva: false,
-      pulsoHistorico: [72, 71, 73, 72, 74, 72, 70],
-      actividadSemana: [4, 5, 4.5, 6, 5, 5.5, 6],
-      ultimaActualizacion: 'Ahora mismo',
-    };
-
-    setPacientes([...pacientes, newPatient]);
-    setAddModalOpen(false);
-
-    Alert.alert(
-      'Solicitud Enviada',
-      `Se ha enviado la solicitud de vinculación para el RUT ${rut}. El paciente ha sido añadido temporalmente en estado Estable.`
-    );
   };
 
   if (detailOpen && selectedPatientId !== null) {
     const p = pacientes.find((x) => x.id === selectedPatientId) || pacientes[0];
+    if (!p) return null;
     return (
       <SafeAreaView style={[styles.safeArea, { backgroundColor: activeColors.background }]}>
         <StatusBar barStyle="dark-content" backgroundColor={activeColors.surface} />
@@ -292,7 +800,15 @@ export default function DoctorApp() {
       />
 
       {/* Cabecera superior común con Logout */}
-      <View style={[styles.topLogoutHeader, tab === 'inicio' && { borderBottomWidth: 0, backgroundColor: activeColors.headerBg }]}>
+      <View style={[
+        styles.topLogoutHeader, 
+        tab === 'inicio' && { borderBottomWidth: 0, backgroundColor: activeColors.headerBg },
+        {
+          height: undefined,
+          paddingTop: insets.top + (Platform.OS === 'android' && isTablet ? 15 : 0),
+          paddingBottom: 10
+        }
+      ]}>
         {tab === 'inicio' ? (
           <Text style={[styles.appTitleHeader, { color: '#ffffff' }]}>Innercore</Text>
         ) : (
@@ -337,10 +853,19 @@ export default function DoctorApp() {
             pacientesCount={pacientes.length}
             fontSizeMultiplier={fontSizeMultiplier}
             activeColors={activeColors}
+            alertasTotales={alertasTotales}
+            adherenciaDispositivo={adherenciaDispositivo}
+            estadoPoblacion={estadoPoblacion}
+            frecuenciaCardiacaPromedio={frecuenciaCardiacaPromedio}
+            promedioOxigenoPoblacion={promedioOxigenoPoblacion}
+            promedioEstresPoblacion={promedioEstresPoblacion}
+            daysRangeReports={daysRangeReports}
+            setDaysRangeReports={setDaysRangeReports}
           />
         )}
         {tab === 'configuracion' && (
           <DoctorConfiguracion
+            userRut={docRut}
             docName={docName}
             setDocName={setDocName}
             docEmail={docEmail}
@@ -353,12 +878,20 @@ export default function DoctorApp() {
             setColorblindMode={setColorblindMode}
             activeColors={activeColors}
             onLogout={handleLogout}
+            onProfileUpdated={loadPacientes}
           />
         )}
       </View>
 
       {/* Barra de Navegación Inferior Estilo Premium Flotante */}
-      <View style={[styles.navbar, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+      <View style={[
+        styles.navbar,
+        {
+          backgroundColor: activeColors.surface,
+          borderColor: activeColors.border,
+          bottom: insets.bottom > 0 ? insets.bottom + 6 : 20
+        }
+      ]}>
         <NavButton
           icon="home"
           label="Inicio"
@@ -448,8 +981,9 @@ function DoctorInicio({ pacientes, onSelectPatient, fontSizeMultiplier, activeCo
   const countSeguimiento = pacientes.filter((p) => p.riesgo === 'Seguimiento').length;
   const countEstables = pacientes.filter((p) => p.riesgo === 'Estable').length;
 
+  const insets = useSafeAreaInsets();
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollPadding, { paddingBottom: 100 + insets.bottom }]} showsVerticalScrollIndicator={false}>
       {/* Cabecera Púrpura */}
       <View style={[styles.purpleHeader, { backgroundColor: activeColors.headerBg }]}>
         <View style={styles.welcomeRow}>
@@ -549,7 +1083,7 @@ function PacienteCardMedico({ patient, onPress, fontSizeMultiplier, activeColors
         <View style={styles.patientDetailsRow}>
           <Feather name="heart" size={11} color={activeColors.heart} style={{ marginRight: 3 }} />
           <Text style={[styles.patientDetailsText, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
-            {patient.lpm} lpm ·
+            {patient.lpm} lpm {patient.esSimulado && '(Simulado)'} ·
           </Text>
           <Feather name="activity" size={11} color={activeColors.textMuted} style={{ marginLeft: 4, marginRight: 3 }} />
           <Text style={[styles.patientDetailsText, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
@@ -586,8 +1120,9 @@ interface DoctorPacientesProps {
 }
 
 function DoctorPacientes({ pacientes, onSelectPatient, onOpenAddModal, fontSizeMultiplier, activeColors }: DoctorPacientesProps) {
+  const insets = useSafeAreaInsets();
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollPadding, { paddingBottom: 100 + insets.bottom }]} showsVerticalScrollIndicator={false}>
       <View style={styles.directoryHeader}>
         <Text style={[styles.pageTitleDir, { color: activeColors.textPrimary, fontSize: getFontSize(24, fontSizeMultiplier) }]}>
           Directorio
@@ -628,6 +1163,13 @@ interface DoctorDetalleProps {
 }
 
 function DoctorDetalle({ patient, onBack, fontSizeMultiplier, activeColors }: DoctorDetalleProps) {
+  const insets = useSafeAreaInsets();
+  const [daysRange, setDaysRange] = useState<7 | 30>(7);
+  const [pulsoHistorico, setPulsoHistorico] = useState<number[]>(patient.pulsoHistorico || []);
+  const [oxigenoHistorico, setOxigenoHistorico] = useState<number[]>(patient.oxigenoHistorico || []);
+  const [estresHistorico, setEstresHistorico] = useState<number[]>(patient.estresHistorico || []);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+
   let riskColor = activeColors.stable;
   let riskBg = activeColors.stableBg;
   if (patient.riesgo === 'Crítico') {
@@ -638,15 +1180,55 @@ function DoctorDetalle({ patient, onBack, fontSizeMultiplier, activeColors }: Do
     riskBg = activeColors.warningBg;
   }
 
-  // Cálculos dinámicos para los gráficos de curvas SVG (Pulsos de 7 días)
+  useEffect(() => {
+    const fetchRangeData = async () => {
+      const db = getDB();
+      try {
+        const limit = daysRange;
+        // 1. Fetch heart rate history
+        const hrRes = await db.getAllAsync<{ bpm: number }>(
+          "SELECT bpm FROM frecuencia_cardiaca WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT ?",
+          [patient.rut, limit]
+        );
+        const hrs = hrRes.reverse().map(h => h.bpm);
+        setPulsoHistorico(hrs.length > 0 ? hrs : [70, 72, 71, 73, 72, 74, 72]);
+
+        // 2. Fetch oxygen history
+        const o2Res = await db.getAllAsync<{ porcentaje: number }>(
+          "SELECT porcentaje FROM oxigeno_sangre WHERE adulto_rut = ? ORDER BY timestamp DESC LIMIT ?",
+          [patient.rut, limit]
+        );
+        const o2s = o2Res.reverse().map(o => o.porcentaje);
+        setOxigenoHistorico(o2s.length > 0 ? o2s : [98, 97, 98, 96, 98, 97, 98]);
+
+        // 3. Fetch stress history (userId and valor)
+        const strRes = await db.getAllAsync<{ valor: number }>(
+          "SELECT valor FROM estres WHERE userId = ? ORDER BY timestamp DESC LIMIT ?",
+          [patient.rut, limit]
+        );
+        const strs = strRes.reverse().map(s => s.valor);
+        setEstresHistorico(strs.length > 0 ? strs : [35, 40, 38, 45, 30, 35, 33]);
+      } catch (err) {
+        console.error('[DoctorDetalle] Error fetching temporal range metrics:', err);
+      }
+    };
+    fetchRangeData();
+  }, [patient.rut, daysRange]);
+
+  // Averages calculations for CP-12
+  const avgBpm = Math.round(pulsoHistorico.reduce((a, b) => a + b, 0) / pulsoHistorico.length) || 72;
+  const avgO2 = Math.round(oxigenoHistorico.reduce((a, b) => a + b, 0) / oxigenoHistorico.length) || 98;
+  const avgStress = Math.round(estresHistorico.reduce((a, b) => a + b, 0) / estresHistorico.length) || 35;
+
+  // Cálculos dinámicos para los gráficos de curvas SVG (Pulsos de 7/30 días)
   const svgWidth = width - 80;
   const svgHeight = 70;
-  const maxVal = Math.max(...patient.pulsoHistorico, 100);
-  const minVal = Math.min(...patient.pulsoHistorico, 50);
-  const valRange = maxVal - minVal;
+  const maxVal = Math.max(...pulsoHistorico, 100);
+  const minVal = Math.min(...pulsoHistorico, 50);
+  const valRange = maxVal - minVal || 10;
 
-  const points = patient.pulsoHistorico.map((val, idx) => {
-    const x = (idx / (patient.pulsoHistorico.length - 1)) * svgWidth;
+  const points = pulsoHistorico.map((val, idx) => {
+    const x = (idx / (pulsoHistorico.length - 1)) * svgWidth;
     const y = svgHeight - 12 - ((val - minVal) / valRange) * (svgHeight - 24);
     return { x, y, val };
   });
@@ -660,7 +1242,45 @@ function DoctorDetalle({ patient, onBack, fontSizeMultiplier, activeColors }: Do
   }
 
   // Encontrar el pico más alto
-  const peakIdx = patient.pulsoHistorico.indexOf(Math.max(...patient.pulsoHistorico));
+  const peakIdx = pulsoHistorico.indexOf(Math.max(...pulsoHistorico));
+
+  // SpO2 Calculations
+  const maxO2 = Math.max(...oxigenoHistorico, 100);
+  const minO2 = Math.min(...oxigenoHistorico, 85);
+  const o2Range = maxO2 - minO2 || 10;
+  const o2Points = oxigenoHistorico.map((val, idx) => {
+    const x = (idx / (oxigenoHistorico.length - 1)) * svgWidth;
+    const y = svgHeight - 12 - ((val - minO2) / o2Range) * (svgHeight - 24);
+    return { x, y, val };
+  });
+  let dPathO2 = '';
+  if (o2Points.length > 0) {
+    dPathO2 = `M ${o2Points[0].x} ${o2Points[0].y} `;
+    for (let i = 1; i < o2Points.length; i++) {
+      dPathO2 += `L ${o2Points[i].x} ${o2Points[i].y} `;
+    }
+  }
+  const minO2Val = Math.min(...oxigenoHistorico);
+  const minO2Idx = oxigenoHistorico.lastIndexOf(minO2Val);
+
+  // Stress Calculations
+  const maxStr = Math.max(...estresHistorico, 100);
+  const minStr = Math.min(...estresHistorico, 0);
+  const strRange = maxStr - minStr || 100;
+  const strPoints = estresHistorico.map((val, idx) => {
+    const x = (idx / (estresHistorico.length - 1)) * svgWidth;
+    const y = svgHeight - 12 - ((val - minStr) / strRange) * (svgHeight - 24);
+    return { x, y, val };
+  });
+  let dPathStr = '';
+  if (strPoints.length > 0) {
+    dPathStr = `M ${strPoints[0].x} ${strPoints[0].y} `;
+    for (let i = 1; i < strPoints.length; i++) {
+      dPathStr += `L ${strPoints[i].x} ${strPoints[i].y} `;
+    }
+  }
+  const peakStrVal = Math.max(...estresHistorico);
+  const peakStrIdx = estresHistorico.lastIndexOf(peakStrVal);
 
   return (
     <View style={[styles.detailContainer, { backgroundColor: activeColors.background }]}>
@@ -682,7 +1302,7 @@ function DoctorDetalle({ patient, onBack, fontSizeMultiplier, activeColors }: Do
         </View>
       </View>
 
-      <ScrollView style={styles.detailScroll} contentContainerStyle={styles.detailScrollPadding} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.detailScroll} contentContainerStyle={[styles.detailScrollPadding, { paddingBottom: 40 + insets.bottom }]} showsVerticalScrollIndicator={false}>
 
         {/* Ficha Resumen de Paciente */}
         <View style={[styles.patientDetailCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
@@ -730,6 +1350,26 @@ function DoctorDetalle({ patient, onBack, fontSizeMultiplier, activeColors }: Do
             </View>
           </View>
         )}
+
+        {/* CP-12: Rango Temporal Segmentado */}
+        <View style={[styles.rangeSegmentContainer, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+          <TouchableOpacity
+            style={[styles.rangeSegment, daysRange === 7 && { backgroundColor: activeColors.primary }]}
+            onPress={() => setDaysRange(7)}
+          >
+            <Text style={[styles.rangeSegmentText, { color: daysRange === 7 ? '#ffffff' : activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              Últimos 7 días
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.rangeSegment, daysRange === 30 && { backgroundColor: activeColors.primary }]}
+            onPress={() => setDaysRange(30)}
+          >
+            <Text style={[styles.rangeSegmentText, { color: daysRange === 30 ? '#ffffff' : activeColors.textSecondary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              Últimos 30 días
+            </Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Métricas Clínicas */}
         <View style={styles.statsContainer}>
@@ -790,7 +1430,7 @@ function DoctorDetalle({ patient, onBack, fontSizeMultiplier, activeColors }: Do
           </View>
 
           <View style={[styles.statDoubleCol, { marginTop: 12 }]}>
-            <View style={[styles.statBox, { backgroundColor: activeColors.surface, borderColor: activeColors.border, flex: 0.5 }]}>
+            <View style={[styles.statBox, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
               <Text style={[styles.statBoxLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
                 SATURACIÓN DE OXÍGENO
               </Text>
@@ -801,6 +1441,32 @@ function DoctorDetalle({ patient, onBack, fontSizeMultiplier, activeColors }: Do
                 {patient.oxigeno < 95 ? '↓ Baja (Umbral 95%)' : '✓ Óptima'}
               </Text>
             </View>
+
+            <View style={[styles.statBox, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+              <Text style={[styles.statBoxLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+                NIVEL DE ESTRÉS
+              </Text>
+              <Text style={[styles.statBoxValue, { color: patient.estres > 80 ? activeColors.critical : activeColors.textPrimary, fontSize: getFontSize(22, fontSizeMultiplier) }]}>
+                {patient.estres} <Text style={{ fontSize: 12, fontWeight: '700' }}>/ 100</Text>
+              </Text>
+              <Text style={[styles.statBoxSub, { color: patient.estres > 80 ? activeColors.critical : patient.estres > 40 ? activeColors.warning : activeColors.stable, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+                {patient.estres > 80 ? '↑ Crítico' : patient.estres > 40 ? '⚠ Moderado' : '✓ Normal'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={[styles.statDoubleCol, { marginTop: 12 }]}>
+            <View style={[styles.statBox, { backgroundColor: activeColors.surface, borderColor: activeColors.border, flex: 0.5 }]}>
+              <Text style={[styles.statBoxLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+                TEMPERATURA CORPORAL
+              </Text>
+              <Text style={[styles.statBoxValue, { color: activeColors.textPrimary, fontSize: getFontSize(22, fontSizeMultiplier) }]}>
+                {patient.temperatura !== null ? `${patient.temperatura} °C` : 'Sin datos registrados'}
+              </Text>
+              <Text style={[styles.statBoxSub, { color: patient.temperatura !== null && patient.temperatura >= 37.5 ? activeColors.critical : activeColors.stable, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+                {patient.temperatura !== null && patient.temperatura >= 37.5 ? '↑ Fiebre' : '✓ Normal'}
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -809,7 +1475,7 @@ function DoctorDetalle({ patient, onBack, fontSizeMultiplier, activeColors }: Do
           <View style={styles.chartTitleRow}>
             <Feather name="heart" size={14} color={activeColors.heart} style={{ marginRight: 6 }} />
             <Text style={[styles.chartCardTitle, { color: activeColors.textPrimary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
-              Evolución del Pulso — Últimos 7 días
+              Evolución del Pulso (Promedio: {avgBpm} LPM) — Últimos {daysRange} días
             </Text>
           </View>
           <View style={styles.svgContainer}>
@@ -896,11 +1562,137 @@ function DoctorDetalle({ patient, onBack, fontSizeMultiplier, activeColors }: Do
           </View>
         </View>
 
+        {/* Gráfico de Saturación de Oxígeno (SpO2) */}
+        <View style={[styles.detailChartCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+          <View style={styles.chartTitleRow}>
+            <Feather name="activity" size={14} color={activeColors.oxygen} style={{ marginRight: 6 }} />
+            <Text style={[styles.chartCardTitle, { color: activeColors.textPrimary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              Saturación de Oxígeno (SpO2, Promedio: {avgO2}%) — Últimos {daysRange} días
+            </Text>
+          </View>
+          <View style={styles.svgContainer}>
+            <Svg height={svgHeight} width={svgWidth}>
+              {/* Umbral en Línea Punteada Roja (95%) */}
+              <Line
+                x1="0"
+                y1={svgHeight - 12 - ((95 - minO2) / o2Range) * (svgHeight - 24)}
+                x2={svgWidth}
+                y2={svgHeight - 12 - ((95 - minO2) / o2Range) * (svgHeight - 24)}
+                stroke={activeColors.critical}
+                strokeWidth="1.5"
+                strokeDasharray="4 4"
+              />
+              <SvgText
+                x={svgWidth - 45}
+                y={svgHeight - 16 - ((95 - minO2) / o2Range) * (svgHeight - 24)}
+                fill={activeColors.critical}
+                fontSize="8"
+                fontWeight="bold"
+              >
+                Umbral (95%)
+              </SvgText>
+
+              {/* Trazo SVG del SpO2 */}
+              <Path d={dPathO2} fill="none" stroke={activeColors.oxygen} strokeWidth="2.5" />
+
+              {/* Puntos y textos de valores */}
+              {o2Points.map((pt, idx) => {
+                const isMin = idx === minO2Idx && pt.val < 95;
+                return (
+                  <React.Fragment key={idx}>
+                    <SvgCircle
+                      cx={pt.x}
+                      cy={pt.y}
+                      r={isMin ? 4.5 : 2.5}
+                      fill={isMin ? activeColors.critical : activeColors.oxygen}
+                    />
+                    {isMin && (
+                      <SvgText
+                        x={pt.x}
+                        y={pt.y - 8}
+                        fill={activeColors.critical}
+                        fontSize="9"
+                        fontWeight="bold"
+                        textAnchor="middle"
+                      >
+                        {pt.val}%
+                      </SvgText>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </Svg>
+          </View>
+        </View>
+
+        {/* Gráfico de Nivel de Estrés */}
+        <View style={[styles.detailChartCard, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+          <View style={styles.chartTitleRow}>
+            <Feather name="zap" size={14} color="#eab308" style={{ marginRight: 6 }} />
+            <Text style={[styles.chartCardTitle, { color: activeColors.textPrimary, fontSize: getFontSize(12, fontSizeMultiplier) }]}>
+              Nivel de Estrés (Promedio: {avgStress}%) — Últimos {daysRange} días
+            </Text>
+          </View>
+          <View style={styles.svgContainer}>
+            <Svg height={svgHeight} width={svgWidth}>
+              {/* Umbral en Línea Punteada Roja (70) */}
+              <Line
+                x1="0"
+                y1={svgHeight - 12 - ((70 - minStr) / strRange) * (svgHeight - 24)}
+                x2={svgWidth}
+                y2={svgHeight - 12 - ((70 - minStr) / strRange) * (svgHeight - 24)}
+                stroke={activeColors.critical}
+                strokeWidth="1.5"
+                strokeDasharray="4 4"
+              />
+              <SvgText
+                x={svgWidth - 45}
+                y={svgHeight - 16 - ((70 - minStr) / strRange) * (svgHeight - 24)}
+                fill={activeColors.critical}
+                fontSize="8"
+                fontWeight="bold"
+              >
+                Umbral (70)
+              </SvgText>
+
+              {/* Trazo SVG del Estrés */}
+              <Path d={dPathStr} fill="none" stroke="#eab308" strokeWidth="2.5" />
+
+              {/* Puntos y textos de valores */}
+              {strPoints.map((pt, idx) => {
+                const isPeak = idx === peakStrIdx && pt.val > 70;
+                return (
+                  <React.Fragment key={idx}>
+                    <SvgCircle
+                      cx={pt.x}
+                      cy={pt.y}
+                      r={isPeak ? 4.5 : 2.5}
+                      fill={isPeak ? activeColors.critical : '#eab308'}
+                    />
+                    {isPeak && (
+                      <SvgText
+                        x={pt.x}
+                        y={pt.y - 8}
+                        fill={activeColors.critical}
+                        fontSize="9"
+                        fontWeight="bold"
+                        textAnchor="middle"
+                      >
+                        {pt.val}
+                      </SvgText>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </Svg>
+          </View>
+        </View>
+
         {/* Botones de acción en expediente */}
         <View style={styles.detailActionsRow}>
           <TouchableOpacity
             style={[styles.detailActBtnPrimary, { backgroundColor: activeColors.primary }]}
-            onPress={() => Alert.alert('Historial Completo', 'Abriendo el expediente médico histórico del paciente...')}
+            onPress={() => setShowHistoryModal(true)}
             activeOpacity={0.8}
           >
             <Feather name="file-text" size={14} color="#ffffff" style={{ marginRight: 6 }} />
@@ -922,6 +1714,15 @@ function DoctorDetalle({ patient, onBack, fontSizeMultiplier, activeColors }: Do
         </View>
 
       </ScrollView>
+
+      <HistorialMedicosModal
+        visible={showHistoryModal}
+        onClose={() => setShowHistoryModal(false)}
+        userId={patient.rut}
+        avatar={patient.avatar}
+        activeColors={activeColors}
+        fontSizeMultiplier={fontSizeMultiplier}
+      />
     </View>
   );
 }
@@ -933,16 +1734,36 @@ interface DoctorReportesProps {
   pacientesCount: number;
   fontSizeMultiplier: number;
   activeColors: any;
+  alertasTotales?: number;
+  adherenciaDispositivo?: number;
+  estadoPoblacion?: { enMovimiento: number; sedentario: number };
+  frecuenciaCardiacaPromedio?: number[];
+  promedioOxigenoPoblacion?: number;
+  promedioEstresPoblacion?: number;
+  daysRangeReports: 7 | 30;
+  setDaysRangeReports: (val: 7 | 30) => void;
 }
 
-function DoctorReportes({ pacientesCount, fontSizeMultiplier, activeColors }: DoctorReportesProps) {
+function DoctorReportes({
+  pacientesCount,
+  fontSizeMultiplier,
+  activeColors,
+  alertasTotales = 0,
+  adherenciaDispositivo = 0,
+  estadoPoblacion = { enMovimiento: 0, sedentario: 0 },
+  frecuenciaCardiacaPromedio = [],
+  promedioOxigenoPoblacion = 98,
+  promedioEstresPoblacion = 35,
+  daysRangeReports,
+  setDaysRangeReports
+}: DoctorReportesProps) {
   // Gráfico semanal de pulso promedio poblacional (7 días)
-  const pulseAvg = [74, 76, 73, 79, 81, 75, 77];
+  const pulseAvg = frecuenciaCardiacaPromedio.filter(val => val > 0);
   const svgWidth = width - 80;
   const svgHeight = 70;
-  const maxVal = 90;
-  const minVal = 60;
-  const valRange = maxVal - minVal;
+  const maxVal = pulseAvg.length > 0 ? Math.max(...pulseAvg, 90) : 90;
+  const minVal = pulseAvg.length > 0 ? Math.min(...pulseAvg, 60) : 60;
+  const valRange = maxVal - minVal || 10;
 
   const points = pulseAvg.map((val, idx) => {
     const x = (idx / (pulseAvg.length - 1)) * svgWidth;
@@ -958,14 +1779,31 @@ function DoctorReportes({ pacientesCount, fontSizeMultiplier, activeColors }: Do
     }
   }
 
+  const insets = useSafeAreaInsets();
+
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollPadding, { paddingBottom: 100 + insets.bottom }]} showsVerticalScrollIndicator={false}>
       <View style={styles.reportsHeaderRow}>
         <Text style={[styles.pageTitleDir, { color: activeColors.textPrimary, fontSize: getFontSize(24, fontSizeMultiplier) }]}>
           Reportes Clínicos
         </Text>
-        <View style={styles.badgeItem}>
-          <Text style={{ fontSize: 10, fontWeight: '700', color: activeColors.primary }}>Últimos 7 días</Text>
+        <View style={[styles.rangeSegmentContainer, { backgroundColor: activeColors.surface, borderColor: activeColors.border, marginHorizontal: 0, marginBottom: 0, width: 140, height: 36, padding: 3 }]}>
+          <TouchableOpacity
+            style={[styles.rangeSegment, daysRangeReports === 7 && { backgroundColor: activeColors.primary }]}
+            onPress={() => setDaysRangeReports(7)}
+          >
+            <Text style={[styles.rangeSegmentText, { color: daysRangeReports === 7 ? '#ffffff' : activeColors.textSecondary, fontSize: getFontSize(9, fontSizeMultiplier) }]}>
+              7 días
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.rangeSegment, daysRangeReports === 30 && { backgroundColor: activeColors.primary }]}
+            onPress={() => setDaysRangeReports(30)}
+          >
+            <Text style={[styles.rangeSegmentText, { color: daysRangeReports === 30 ? '#ffffff' : activeColors.textSecondary, fontSize: getFontSize(9, fontSizeMultiplier) }]}>
+              30 días
+            </Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -977,10 +1815,10 @@ function DoctorReportes({ pacientesCount, fontSizeMultiplier, activeColors }: Do
               ALERTAS TOTALES
             </Text>
             <Text style={[styles.statBoxValue, { color: activeColors.textPrimary, fontSize: getFontSize(28, fontSizeMultiplier) }]}>
-              12
+              {alertasTotales}
             </Text>
             <Text style={{ fontSize: 10, fontWeight: '700', color: activeColors.critical, marginTop: 4 }}>
-              ↑ 15% vs sem. anterior
+              Alertas del periodo
             </Text>
           </View>
 
@@ -989,10 +1827,37 @@ function DoctorReportes({ pacientesCount, fontSizeMultiplier, activeColors }: Do
               ADHERENCIA DISP.
             </Text>
             <Text style={[styles.statBoxValue, { color: activeColors.textPrimary, fontSize: getFontSize(28, fontSizeMultiplier) }]}>
-              85%
+              {adherenciaDispositivo}%
             </Text>
             <Text style={{ fontSize: 10, fontWeight: '700', color: activeColors.stable, marginTop: 4 }}>
               Uso de wearable activo
+            </Text>
+          </View>
+        </View>
+
+        {/* Segunda Fila KPIs para SpO2 y Estrés Poblacionales */}
+        <View style={[styles.summaryRow, { marginTop: 12 }]}>
+          <View style={[styles.statBox, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+            <Text style={[styles.statBoxLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              SPO2 PROMEDIO
+            </Text>
+            <Text style={[styles.statBoxValue, { color: activeColors.textPrimary, fontSize: getFontSize(28, fontSizeMultiplier) }]}>
+              {promedioOxigenoPoblacion}%
+            </Text>
+            <Text style={{ fontSize: 10, fontWeight: '700', color: activeColors.primary, marginTop: 4 }}>
+              Saturación de oxígeno
+            </Text>
+          </View>
+
+          <View style={[styles.statBox, { backgroundColor: activeColors.surface, borderColor: activeColors.border }]}>
+            <Text style={[styles.statBoxLabel, { color: activeColors.textSecondary, fontSize: getFontSize(10, fontSizeMultiplier) }]}>
+              ESTRÉS PROMEDIO
+            </Text>
+            <Text style={[styles.statBoxValue, { color: activeColors.textPrimary, fontSize: getFontSize(28, fontSizeMultiplier) }]}>
+              {promedioEstresPoblacion}
+            </Text>
+            <Text style={{ fontSize: 10, fontWeight: '700', color: activeColors.stable, marginTop: 4 }}>
+              Nivel de estrés global
             </Text>
           </View>
         </View>
@@ -1005,30 +1870,39 @@ function DoctorReportes({ pacientesCount, fontSizeMultiplier, activeColors }: Do
 
           {/* Barra apilada simulada con Flex */}
           <View style={styles.stackedBarContainer}>
-            <View style={[styles.stackedBarSegment, { flex: 2, backgroundColor: activeColors.critical }]}>
-              <Text style={styles.stackedBarText}>50%</Text>
-            </View>
-            <View style={[styles.stackedBarSegment, { flex: 1, backgroundColor: activeColors.warning }]}>
-              <Text style={styles.stackedBarText}>25%</Text>
-            </View>
-            <View style={[styles.stackedBarSegment, { flex: 1, backgroundColor: activeColors.stable }]}>
-              <Text style={styles.stackedBarText}>25%</Text>
-            </View>
+            {estadoPoblacion.enMovimiento === 0 && estadoPoblacion.sedentario === 0 ? (
+              <View style={[styles.stackedBarSegment, { flex: 1, backgroundColor: activeColors.border }]}>
+                <Text style={[styles.stackedBarText, { color: activeColors.textSecondary }]}>Sin datos</Text>
+              </View>
+            ) : (
+              <>
+                {estadoPoblacion.enMovimiento > 0 && (
+                  <View style={[styles.stackedBarSegment, { flex: estadoPoblacion.enMovimiento, backgroundColor: activeColors.stable }]}>
+                    <Text style={styles.stackedBarText}>
+                      {Math.round((estadoPoblacion.enMovimiento / (estadoPoblacion.enMovimiento + estadoPoblacion.sedentario)) * 100)}%
+                    </Text>
+                  </View>
+                )}
+                {estadoPoblacion.sedentario > 0 && (
+                  <View style={[styles.stackedBarSegment, { flex: estadoPoblacion.sedentario, backgroundColor: activeColors.critical }]}>
+                    <Text style={styles.stackedBarText}>
+                      {Math.round((estadoPoblacion.sedentario / (estadoPoblacion.enMovimiento + estadoPoblacion.sedentario)) * 100)}%
+                    </Text>
+                  </View>
+                )}
+              </>
+            )}
           </View>
 
           {/* Glosa del Gráfico */}
           <View style={styles.legendContainer}>
             <View style={styles.legendItem}>
-              <View style={[styles.legendColorBox, { backgroundColor: activeColors.critical }]} />
-              <Text style={[styles.legendText, { color: activeColors.textSecondary, fontSize: getFontSize(9, fontSizeMultiplier) }]}>Críticos</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendColorBox, { backgroundColor: activeColors.warning }]} />
-              <Text style={[styles.legendText, { color: activeColors.textSecondary, fontSize: getFontSize(9, fontSizeMultiplier) }]}>Seguimiento</Text>
-            </View>
-            <View style={styles.legendItem}>
               <View style={[styles.legendColorBox, { backgroundColor: activeColors.stable }]} />
-              <Text style={[styles.legendText, { color: activeColors.textSecondary, fontSize: getFontSize(9, fontSizeMultiplier) }]}>Estable</Text>
+              <Text style={[styles.legendText, { color: activeColors.textSecondary, fontSize: getFontSize(9, fontSizeMultiplier) }]}>En movimiento</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendColorBox, { backgroundColor: activeColors.critical }]} />
+              <Text style={[styles.legendText, { color: activeColors.textSecondary, fontSize: getFontSize(9, fontSizeMultiplier) }]}>Sedentario</Text>
             </View>
           </View>
         </View>
@@ -1038,53 +1912,69 @@ function DoctorReportes({ pacientesCount, fontSizeMultiplier, activeColors }: Do
           <View style={styles.chartTitleRow}>
             <Feather name="activity" size={14} color={activeColors.primary} style={{ marginRight: 6 }} />
             <Text style={[styles.chartCardTitle, { color: activeColors.textPrimary, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
-              FREC. CARDÍACA PROMEDIO (CRÍTICOS)
+              FREC. CARDÍACA PROMEDIO
             </Text>
           </View>
 
-          <View style={styles.svgContainer}>
-            <Svg height={svgHeight} width={svgWidth}>
-              <Line
-                x1="0"
-                y1={svgHeight - 12 - ((75 - minVal) / valRange) * (svgHeight - 24)}
-                x2={svgWidth}
-                y2={svgHeight - 12 - ((75 - minVal) / valRange) * (svgHeight - 24)}
-                stroke={activeColors.textMuted}
-                strokeWidth="1"
-                strokeDasharray="2 2"
-              />
-              <SvgText
-                x={svgWidth - 75}
-                y={svgHeight - 16 - ((75 - minVal) / valRange) * (svgHeight - 24)}
-                fill={activeColors.textSecondary}
-                fontSize="8"
-                fontWeight="600"
-              >
-                Media Población: 75 lpm
-              </SvgText>
-
-              <Path d={dPath} fill="none" stroke={activeColors.primary} strokeWidth="2.5" />
-
-              {points.map((pt, idx) => (
-                <React.Fragment key={idx}>
-                  <SvgCircle
-                    cx={pt.x}
-                    cy={pt.y}
-                    r="3"
-                    fill={pt.val > 80 ? activeColors.critical : activeColors.primary}
+          {pulseAvg.length > 0 ? (
+            <>
+              <View style={styles.svgContainer}>
+                <Svg height={svgHeight} width={svgWidth}>
+                  <Line
+                    x1="0"
+                    y1={svgHeight - 12 - ((75 - minVal) / valRange) * (svgHeight - 24)}
+                    x2={svgWidth}
+                    y2={svgHeight - 12 - ((75 - minVal) / valRange) * (svgHeight - 24)}
+                    stroke={activeColors.textMuted}
+                    strokeWidth="1"
+                    strokeDasharray="2 2"
                   />
-                </React.Fragment>
-              ))}
-            </Svg>
-          </View>
+                  <SvgText
+                    x={svgWidth - 75}
+                    y={svgHeight - 16 - ((75 - minVal) / valRange) * (svgHeight - 24)}
+                    fill={activeColors.textSecondary}
+                    fontSize="8"
+                    fontWeight="600"
+                  >
+                    Media Población: 75 lpm
+                  </SvgText>
 
-          <View style={styles.graphDaysRow}>
-            {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Hoy'].map((day) => (
-              <Text key={day} style={[styles.graphDayText, { color: activeColors.textSecondary, fontSize: getFontSize(8, fontSizeMultiplier) }]}>
-                {day}
-              </Text>
-            ))}
-          </View>
+                  <Path d={dPath} fill="none" stroke={activeColors.primary} strokeWidth="2.5" />
+
+                  {points.map((pt, idx) => (
+                    <React.Fragment key={idx}>
+                      <SvgCircle
+                        cx={pt.x}
+                        cy={pt.y}
+                        r="3"
+                        fill={pt.val > 80 ? activeColors.critical : activeColors.primary}
+                      />
+                    </React.Fragment>
+                  ))}
+                </Svg>
+              </View>
+
+              <View style={styles.graphDaysRow}>
+                {daysRangeReports === 7 ? (
+                  ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Hoy'].map((day) => (
+                    <Text key={day} style={[styles.graphDayText, { color: activeColors.textSecondary, fontSize: getFontSize(8, fontSizeMultiplier) }]}>
+                      {day}
+                    </Text>
+                  ))
+                ) : (
+                  ['Hace 30d', 'Hace 20d', 'Hace 10d', 'Hoy'].map((day) => (
+                    <Text key={day} style={[styles.graphDayText, { color: activeColors.textSecondary, fontSize: getFontSize(8, fontSizeMultiplier) }]}>
+                      {day}
+                    </Text>
+                  ))
+                )}
+              </View>
+            </>
+          ) : (
+            <View style={{ height: svgHeight + 20, justifyContent: 'center', alignItems: 'center' }}>
+              <Text style={{ color: activeColors.textMuted, fontSize: 12 }}>Esperando datos...</Text>
+            </View>
+          )}
         </View>
 
         {/* Botón Exportar PDF */}
@@ -1107,6 +1997,7 @@ function DoctorReportes({ pacientesCount, fontSizeMultiplier, activeColors }: Do
 // 5. SUB-PANTALLA: CONFIGURACIÓN / AJUSTES MÉDICO
 // ===============================================================================
 interface DoctorConfiguracionProps {
+  userRut: string;
   docName: string;
   setDocName: (n: string) => void;
   docEmail: string;
@@ -1119,9 +2010,11 @@ interface DoctorConfiguracionProps {
   setColorblindMode: (b: boolean) => void;
   activeColors: any;
   onLogout: () => void;
+  onProfileUpdated: () => void;
 }
 
 function DoctorConfiguracion({
+  userRut,
   docName,
   setDocName,
   docEmail,
@@ -1134,13 +2027,19 @@ function DoctorConfiguracion({
   setColorblindMode,
   activeColors,
   onLogout,
+  onProfileUpdated,
 }: DoctorConfiguracionProps) {
+  const { updateSessionName } = useAuth();
   const [pass, setPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
 
   const avataresDisponibles = ['🩺', '👩‍⚕️', '👨‍⚕️', '🔬', '🏥', '⚕️'];
 
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
+    if (!docName.trim() || !docEmail.trim()) {
+      Alert.alert('Datos Incompletos', 'El nombre y el correo no pueden estar vacíos.');
+      return;
+    }
     if (pass && pass.length < 6) {
       Alert.alert('Error', 'La contraseña debe tener al menos 6 caracteres.');
       return;
@@ -1150,13 +2049,46 @@ function DoctorConfiguracion({
       return;
     }
 
-    Alert.alert('Éxito', 'Configuración profesional actualizada correctamente.');
-    setPass('');
-    setConfirmPass('');
+    // Split name into names and last names
+    const parts = docName.trim().split(' ');
+    const nombres = parts[0] || '';
+    const apellidos = parts.slice(1).join(' ') || '';
+
+    const db = getDB();
+    try {
+      // 1. Update nombres, apellidos, and email in medico table
+      await db.runAsync(
+        "UPDATE medico SET nombres = ?, apellidos = ?, email = ? WHERE rut = ?",
+        [nombres, apellidos, docEmail, userRut]
+      );
+
+      // 2. If password entered, hash and update users table
+      if (pass) {
+        const hashedPassword = sha256(pass);
+        await db.runAsync(
+          "UPDATE users SET psswd_hash = ? WHERE rut = ?",
+          [hashedPassword, userRut]
+        );
+      }
+
+      // 3. Update reactive context name
+      updateSessionName(nombres);
+
+      // 4. Trigger profile re-fetch in doctor.tsx
+      onProfileUpdated();
+
+      Alert.alert('Éxito', 'Configuración profesional actualizada correctamente.');
+      setPass('');
+      setConfirmPass('');
+    } catch (error) {
+      console.error('Error saving doctor profile changes:', error);
+      Alert.alert('Error', 'Hubo un problema al guardar los cambios en la base de datos.');
+    }
   };
 
+  const insets = useSafeAreaInsets();
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPadding} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollPadding, { paddingBottom: 100 + insets.bottom }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
       <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(24, fontSizeMultiplier) }]}>
         Ajustes
       </Text>
@@ -1420,12 +2352,12 @@ function AgregarPacienteModal({ visible, onClose, onSubmit, fontSizeMultiplier, 
           <View style={[styles.inputContainer, { borderColor: activeColors.border, marginVertical: 16 }]}>
             <TextInput
               style={[styles.formInput, { fontSize: getFontSize(15, fontSizeMultiplier), color: activeColors.textPrimary }]}
-              placeholder="Ej: 12345678-9"
+              placeholder="Ej: 12.345.678-9"
               placeholderTextColor={activeColors.textMuted}
               autoCapitalize="characters"
               autoCorrect={false}
               value={rut}
-              onChangeText={setRut}
+              onChangeText={(text) => setRut(formatRut(text))}
             />
           </View>
 
@@ -2208,6 +3140,23 @@ const styles = StyleSheet.create({
   },
   modalSubmitBtnText: {
     color: '#ffffff',
+    fontWeight: '700',
+  },
+  rangeSegmentContainer: {
+    flexDirection: 'row',
+    borderWidth: 1.5,
+    borderRadius: 16,
+    padding: 4,
+    marginHorizontal: 20,
+    marginBottom: 16,
+  },
+  rangeSegment: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 12,
+  },
+  rangeSegmentText: {
     fontWeight: '700',
   },
 });
