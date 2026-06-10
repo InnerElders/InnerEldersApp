@@ -196,6 +196,9 @@ interface Paciente {
   };
   pulsoHistorico: number[];
   actividadSemana: number[]; // horas activas lun-dom
+  latitud_segura?: number;
+  longitud_segura?: number;
+  radio_seguro?: number;
 }
 
 const PACIENTES_DATA: Paciente[] = [
@@ -702,7 +705,10 @@ export default function CaregiverApp() {
             longitude: currentLon
           },
           pulsoHistorico,
-          actividadSemana: activeHours
+          actividadSemana: activeHours,
+          latitud_segura: s.latitud_segura,
+          longitud_segura: s.longitud_segura,
+          radio_seguro: s.radio_seguro
         });
       }
 
@@ -1126,10 +1132,26 @@ function CaregiverInicio({ onSelectPatient, fontSizeMultiplier, activeColors, na
               Panel de monitoreo — Hoy, 25 Abr
             </Text>
           </View>
-          <TouchableOpacity style={[styles.alertBellHeader, { backgroundColor: activeColors.primary === '#10b981' ? '#065f46' : activeColors.primaryLight }]} activeOpacity={0.7}>
-            <Feather name="bell" size={18} color={activeColors.primary === '#10b981' ? '#fde047' : activeColors.primary} />
-            {activeAlertsCount > 0 && <View style={styles.bellRedDot} />}
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity
+              style={[
+                styles.alertBellHeader,
+                { 
+                  backgroundColor: activeColors.primary === '#10b981' ? '#065f46' : activeColors.primaryLight,
+                  marginRight: 8
+                }
+              ]}
+              onPress={() => router.push('/caregiver-map' as any)}
+              activeOpacity={0.7}
+            >
+              <Feather name="map" size={18} color={activeColors.primary === '#10b981' ? '#ffffff' : activeColors.primary} />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={[styles.alertBellHeader, { backgroundColor: activeColors.primary === '#10b981' ? '#065f46' : activeColors.primaryLight }]} activeOpacity={0.7}>
+              <Feather name="bell" size={18} color={activeColors.primary === '#10b981' ? '#fde047' : activeColors.primary} />
+              {activeAlertsCount > 0 && <View style={styles.bellRedDot} />}
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Resumen de Métricas */}
@@ -1253,9 +1275,24 @@ function CaregiverPacientes({ onSelectPatient, fontSizeMultiplier, activeColors,
   const insets = useSafeAreaInsets();
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollPadding, { paddingBottom: 100 + insets.bottom }]} showsVerticalScrollIndicator={false}>
-      <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(24, fontSizeMultiplier) }]}>
-        Mis Pacientes
-      </Text>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingRight: 20 }}>
+        <Text style={[styles.pageTitle, { color: activeColors.textPrimary, fontSize: getFontSize(24, fontSizeMultiplier) }]}>
+          Mis Pacientes
+        </Text>
+        <TouchableOpacity
+          style={[
+            styles.alertBellHeader,
+            { 
+              backgroundColor: activeColors.primaryLight,
+              marginTop: 16
+            }
+          ]}
+          onPress={() => router.push('/caregiver-map' as any)}
+          activeOpacity={0.7}
+        >
+          <Feather name="map" size={18} color={activeColors.primary} />
+        </TouchableOpacity>
+      </View>
 
       <View style={styles.patientsList}>
         {patients.map((p) => (
@@ -1590,9 +1627,17 @@ function CaregiverDetalle({ patient, onBack, fontSizeMultiplier, activeColors, o
             {patient.hasGps && (
               <Circle
                 center={patient.coordenadas}
-                radius={80}
+                radius={30}
                 strokeColor={patient.alertaActiva ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)'}
                 fillColor={patient.alertaActiva ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)'}
+              />
+            )}
+            {patient.latitud_segura !== undefined && patient.longitud_segura !== undefined && patient.radio_seguro !== undefined && (
+              <Circle
+                center={{ latitude: patient.latitud_segura, longitude: patient.longitud_segura }}
+                radius={patient.radio_seguro}
+                strokeColor="rgba(16, 185, 129, 0.6)"
+                fillColor="rgba(16, 185, 129, 0.08)"
               />
             )}
           </MapView>
@@ -1600,7 +1645,7 @@ function CaregiverDetalle({ patient, onBack, fontSizeMultiplier, activeColors, o
           <View style={[styles.mapLabelTag, { backgroundColor: activeColors.surface }]}>
             <Feather name="map-pin" size={12} color={activeColors.heart} style={{ marginRight: 4 }} />
             <Text style={[styles.mapLabelTagText, { color: activeColors.primaryDark, fontSize: getFontSize(11, fontSizeMultiplier) }]}>
-              {!patient.hasGps ? 'Ubicación no disponible aún' : (patient.alertaActiva ? 'Fuera de zona segura habitual' : 'Dentro de zona segura')}
+              {patient.hasGps ? `Última ubicación de ${patient.nombre}` : 'Ubicación no disponible aún'}
             </Text>
           </View>
         </View>

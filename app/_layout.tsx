@@ -31,6 +31,7 @@ export default function RootLayout() {
           <Stack.Screen name="doctor-register" options={{ headerShown: false }} />
           <Stack.Screen name="senior" options={{ headerShown: false }} />
           <Stack.Screen name="caregiver" options={{ headerShown: false }} />
+          <Stack.Screen name="caregiver-map" options={{ headerShown: false }} />
           <Stack.Screen name="doctor" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />

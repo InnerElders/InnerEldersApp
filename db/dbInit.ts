@@ -226,6 +226,12 @@ export async function initDBSchema(): Promise<void> {
     `);
 
     await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_gps_registro_adulto_ts
+      ON gps_registro(adulto_rut, timestamp DESC);
+    `);
+
+
+    await db.execAsync(`
       CREATE TABLE IF NOT EXISTS actividad_registro (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         adulto_rut TEXT NOT NULL,

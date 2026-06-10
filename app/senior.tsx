@@ -28,6 +28,7 @@ import { locationService } from '@/services/locationService';
 import { BarChart, LineChart } from 'react-native-gifted-charts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import HistorialMedicosModal from '@/components/HistorialMedicosModal';
+import { useLocationTracker } from '@/hooks/useLocationTracker';
 
 let MapView: any;
 let Marker: any;
@@ -141,6 +142,9 @@ export default function SeniorApp() {
   const [tab, setTab] = useState<'inicio' | 'salud' | 'registro' | 'dispositivo' | 'configuracion'>('inicio');
   const { userSession, logout: authLogout } = useAuth();
   const rut = userSession?.rut || '12.345.678-9';
+
+  // Registrar tracker de ubicación periódica en primer plano
+  useLocationTracker(rut);
 
   // ─── Estados de Perfil Editables ──────────────────────────────────────────
   const [name, setName] = useState(userSession?.nombres || 'Acdiel');
@@ -404,7 +408,7 @@ export default function SeniorApp() {
     checkInitialLocation();
 
     // Iniciar servicios nativos del Adulto Mayor
-    locationService.startTracking(rut);
+    // locationService.startTracking(rut);
     activityService.startTracking(rut);
     healthConnectService.autoReconnect(rut);
 
@@ -489,7 +493,7 @@ export default function SeniorApp() {
     });
 
     return () => {
-      locationService.stopTracking();
+      // locationService.stopTracking();
       activityService.stopTracking();
       healthConnectService.stopSyncPolling();
       unsubscribeActivity();
